@@ -1,5 +1,7 @@
 import requests
-from config import load_api_key
+
+
+from .config import load_api_key
 
 API_BASE = "https://api.nextdns.io"
 

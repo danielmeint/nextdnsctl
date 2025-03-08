@@ -5,7 +5,11 @@ from .config import save_api_key, load_api_key
 from .api import get_profiles, add_to_denylist, remove_from_denylist
 
 
+__version__ = "0.1.0"
+
+
 @click.group()
+@click.version_option(__version__)
 def cli():
     """nextdnsctl: A CLI tool for managing NextDNS profiles."""
     pass
