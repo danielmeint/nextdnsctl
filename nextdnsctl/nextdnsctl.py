@@ -1,14 +1,19 @@
 import click
 import requests
+import json
 
 from .config import save_api_key, load_api_key
 from .api import (
     get_profiles, add_to_denylist, remove_from_denylist,
     add_to_allowlist, remove_from_allowlist
 )
+from .sync import (
+    load_sync_config, save_sync_config, sync_profile,
+    sync_all_profiles, get_current_config
+)
 
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 @click.group()
@@ -188,6 +193,64 @@ def allowlist_import(profile_id, source, inactive):
             click.echo(result)
         except Exception as e:
             click.echo(f"Failed to add {domain}: {e}", err=True)
+
+
+@cli.group("sync")
+def sync():
+    """Manage NextDNS configuration sync."""
+    pass
+
+
+@sync.command("export")
+@click.argument("profile_id")
+@click.argument("output_file", type=click.Path())
+def sync_export(profile_id, output_file):
+    """Export current profile configuration to a file."""
+    try:
+        config = get_current_config(profile_id)
+        with open(output_file, "w") as f:
+            json.dump({"profiles": {profile_id: config}}, f, indent=2)
+        click.echo(f"Configuration exported to {output_file}")
+    except Exception as e:
+        click.echo(f"Error exporting configuration: {e}", err=True)
+        raise click.Abort()
+
+
+@sync.command("import")
+@click.argument("config_file", type=click.Path(exists=True))
+def sync_import(config_file):
+    """Import and save configuration for sync."""
+    try:
+        with open(config_file, "r") as f:
+            config = json.load(f)
+        save_sync_config(config)
+        click.echo("Configuration imported successfully")
+    except Exception as e:
+        click.echo(f"Error importing configuration: {e}", err=True)
+        raise click.Abort()
+
+
+@sync.command("apply")
+@click.argument("profile_id", required=False)
+def sync_apply(profile_id):
+    """Apply configuration to one or all profiles."""
+    try:
+        if profile_id:
+            config = load_sync_config()
+            if profile_id not in config.get("profiles", {}):
+                click.echo(f"Profile {profile_id} not found in sync config", err=True)
+                raise click.Abort()
+            changes = sync_profile(profile_id, config["profiles"][profile_id])
+            for change in changes:
+                click.echo(f"[{profile_id}] {change}")
+        else:
+            results = sync_all_profiles()
+            for pid, changes in results.items():
+                for change in changes:
+                    click.echo(f"[{pid}] {change}")
+    except Exception as e:
+        click.echo(f"Error applying configuration: {e}", err=True)
+        raise click.Abort()
 
 
 if __name__ == "__main__":

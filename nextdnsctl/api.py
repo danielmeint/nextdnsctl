@@ -69,3 +69,64 @@ def remove_from_allowlist(profile_id, domain):
     """Remove a domain from the allowlist."""
     api_call("DELETE", f"/profiles/{profile_id}/allowlist/{domain}")
     return f"Removed {domain}"
+
+
+def get_settings(profile_id):
+    """Retrieve all settings for a profile."""
+    return api_call("GET", f"/profiles/{profile_id}/settings")
+
+
+def update_settings(profile_id, settings):
+    """Update settings for a profile."""
+    api_call("PATCH", f"/profiles/{profile_id}/settings", data=settings)
+    return "Settings updated"
+
+
+def get_security(profile_id):
+    """Retrieve security settings for a profile."""
+    return api_call("GET", f"/profiles/{profile_id}/security")
+
+
+def update_security(profile_id, settings):
+    """Update security settings for a profile."""
+    api_call("PATCH", f"/profiles/{profile_id}/security", data=settings)
+    return "Security settings updated"
+
+
+def get_privacy(profile_id):
+    """Retrieve privacy settings for a profile."""
+    return api_call("GET", f"/profiles/{profile_id}/privacy")
+
+
+def update_privacy(profile_id, settings):
+    """Update privacy settings for a profile."""
+    api_call("PATCH", f"/profiles/{profile_id}/privacy", data=settings)
+    return "Privacy settings updated"
+
+
+def get_parentalcontrol(profile_id):
+    """Retrieve parental control settings for a profile."""
+    return api_call("GET", f"/profiles/{profile_id}/parentalcontrol")
+
+
+def update_parentalcontrol(profile_id, settings):
+    """Update parental control settings for a profile."""
+    api_call("PATCH", f"/profiles/{profile_id}/parentalcontrol", data=settings)
+    return "Parental control settings updated"
+
+
+def get_rewrites(profile_id):
+    """Retrieve DNS rewrites for a profile."""
+    return api_call("GET", f"/profiles/{profile_id}/rewrites")["data"]
+
+
+def add_rewrite(profile_id, domain, data):
+    """Add a DNS rewrite."""
+    api_call("POST", f"/profiles/{profile_id}/rewrites", data={"id": domain, **data})
+    return f"Added rewrite for {domain}"
+
+
+def remove_rewrite(profile_id, domain):
+    """Remove a DNS rewrite."""
+    api_call("DELETE", f"/profiles/{profile_id}/rewrites/{domain}")
+    return f"Removed rewrite for {domain}"
