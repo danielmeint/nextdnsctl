@@ -51,3 +51,21 @@ def remove_from_denylist(profile_id, domain):
     """Remove a domain from the denylist."""
     api_call("DELETE", f"/profiles/{profile_id}/denylist/{domain}")
     return f"Removed {domain}"
+
+
+def get_allowlist(profile_id):
+    """Retrieve the current allowlist for a profile."""
+    return api_call("GET", f"/profiles/{profile_id}/allowlist")["data"]
+
+
+def add_to_allowlist(profile_id, domain, active=True):
+    """Add a domain to the allowlist."""
+    data = {"id": domain, "active": active}
+    api_call("POST", f"/profiles/{profile_id}/allowlist", data=data)
+    return f"Added {domain} as {'active' if active else 'inactive'}"
+
+
+def remove_from_allowlist(profile_id, domain):
+    """Remove a domain from the allowlist."""
+    api_call("DELETE", f"/profiles/{profile_id}/allowlist/{domain}")
+    return f"Removed {domain}"

@@ -2,7 +2,10 @@ import click
 import requests
 
 from .config import save_api_key, load_api_key
-from .api import get_profiles, add_to_denylist, remove_from_denylist
+from .api import (
+    get_profiles, add_to_denylist, remove_from_denylist,
+    add_to_allowlist, remove_from_allowlist
+)
 
 
 __version__ = "0.1.0"
@@ -119,6 +122,72 @@ def read_source(source):
     else:
         with open(source, 'r') as f:
             return f.read()
+
+
+@cli.group("allowlist")
+def allowlist():
+    """Manage the NextDNS allowlist."""
+
+
+@allowlist.command("add")
+@click.argument("profile_id")
+@click.argument("domains", nargs=-1)
+@click.option("--inactive", is_flag=True, help="Add domains as inactive (not allowed)")
+def allowlist_add(profile_id, domains, inactive):
+    """Add domains to the NextDNS allowlist."""
+    if not domains:
+        click.echo("No domains provided.", err=True)
+        raise click.Abort()
+
+    for domain in domains:
+        try:
+            result = add_to_allowlist(profile_id, domain, active=not inactive)
+            click.echo(result)
+        except Exception as e:
+            click.echo(f"Failed to add {domain}: {e}", err=True)
+
+
+@allowlist.command("remove")
+@click.argument("profile_id")
+@click.argument("domains", nargs=-1)
+def allowlist_remove(profile_id, domains):
+    """Remove domains from the NextDNS allowlist."""
+    if not domains:
+        click.echo("No domains provided.", err=True)
+        raise click.Abort()
+
+    for domain in domains:
+        try:
+            result = remove_from_allowlist(profile_id, domain)
+            click.echo(result)
+        except Exception as e:
+            click.echo(f"Failed to remove {domain}: {e}", err=True)
+
+
+@allowlist.command("import")
+@click.argument("profile_id")
+@click.argument("source")
+@click.option("--inactive", is_flag=True, help="Add domains as inactive (not allowed)")
+def allowlist_import(profile_id, source, inactive):
+    """Import domains from a file or URL to the NextDNS allowlist."""
+    try:
+        content = read_source(source)
+    except Exception as e:
+        click.echo(f"Error reading source: {e}", err=True)
+        raise click.Abort()
+
+    domains = [line.strip() for line in content.splitlines() if line.strip()
+               and not line.strip().startswith('#')]
+    if not domains:
+        click.echo("No domains found in source.", err=True)
+        return
+
+    for domain in domains:
+        try:
+            result = add_to_allowlist(profile_id, domain, active=not inactive)
+            click.echo(result)
+        except Exception as e:
+            click.echo(f"Failed to add {domain}: {e}", err=True)
 
 
 if __name__ == "__main__":
