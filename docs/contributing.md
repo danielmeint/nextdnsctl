@@ -13,12 +13,12 @@ Thanks for your interest in contributing!
 - Install Python 3.6+.
 - Clone your fork: `git clone https://github.com/<your-username>/nextdnsctl.git`.
 - Install dependencies: `pip install -r requirements.txt` (create this file if needed).
-- Run locally: `python nextdnsctl.py`.
+- Run locally: `python -m nextdnsctl.nextdnsctl`.
 
 ## Ideas
-- Add allowlist support.
 - Implement full config sync (JSON/YAML).
 - Support other DNS services (e.g., ControlD).
+- Add support for managing other NextDNS settings (e.g., security settings, logging).
 
 ## Code Style
 - Follow PEP 8 for Python.
