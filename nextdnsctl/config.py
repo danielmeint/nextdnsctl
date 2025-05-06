@@ -19,5 +19,7 @@ def load_api_key():
     with open(CONFIG_FILE, "r") as f:
         config = json.load(f)
         if "api_key" not in config:
-            raise ValueError("Invalid config file. Run 'nextdnsctl auth <api_key>' to set up.")
+            raise ValueError(
+                "Invalid config file. Run 'nextdnsctl auth <api_key>' to set up."
+            )
         return config["api_key"]
