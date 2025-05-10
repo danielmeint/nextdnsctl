@@ -21,7 +21,7 @@ setup(
     license="MIT",
     url="https://github.com/danielmeint/nextdnsctl",
     keywords=["nextdns", "cli", "dns", "security", "networking"],
-    python_requires='>=3.6',
+    python_requires=">=3.6",
     classifiers=[
         "Development Status :: 4 - Beta",
         "License :: OSI Approved :: MIT License",

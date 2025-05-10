@@ -19,11 +19,11 @@ __version__ = "0.2.0"
 
 # Helper function to perform operations on a list of domains
 def _perform_domain_operations(
-        ctx,
-        domains_to_process,
-        operation_callable,
-        item_name_singular="domain",
-        action_verb="process",
+    ctx,
+    domains_to_process,
+    operation_callable,
+    item_name_singular="domain",
+    action_verb="process",
 ):
     """
     Iterates over a list of items (e.g., domains) and performs an operation on each.

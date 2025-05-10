@@ -2,7 +2,6 @@ import requests
 import time
 from requests.exceptions import RequestException
 
-
 from .config import load_api_key
 
 API_BASE = "https://api.nextdns.io"
@@ -19,12 +18,12 @@ class RateLimitStillActiveError(Exception):  # Added
 
 
 def api_call(
-    method,
-    endpoint,
-    data=None,
-    retries=DEFAULT_RETRIES,
-    delay=DEFAULT_DELAY,
-    timeout=DEFAULT_TIMEOUT,
+        method,
+        endpoint,
+        data=None,
+        retries=DEFAULT_RETRIES,
+        delay=DEFAULT_DELAY,
+        timeout=DEFAULT_TIMEOUT,
 ):
     """Make an API request to NextDNS."""
     api_key = load_api_key()
@@ -44,7 +43,7 @@ def api_call(
                         sleep_time = int(retry_after_header)
                         print(
                             f"Rate limited by API (Retry-After: {sleep_time}s). "
-                            f"Retrying attempt {attempt + 1}/{retries +1 }..."
+                            f"Retrying attempt {attempt + 1}/{retries + 1}..."
                         )
                     else:
                         sleep_time = DEFAULT_PATIENT_RETRY_PAUSE_SECONDS
@@ -73,7 +72,7 @@ def api_call(
             if response.status_code not in (200, 201, 204):
                 # For server errors (5xx), retry with exponential backoff if retries are available
                 if response.status_code >= 500 and attempt < retries:
-                    current_delay = delay * (2**attempt)
+                    current_delay = delay * (2 ** attempt)
                     print(
                         f"Server error ({response.status_code}). Retrying in {current_delay}s "
                         f"(attempt {attempt + 1}/{retries + 1})..."
@@ -105,7 +104,7 @@ def api_call(
 
         except RequestException as e:
             if attempt < retries:
-                current_delay = delay * (2**attempt)
+                current_delay = delay * (2 ** attempt)
                 print(
                     f"Network error ({e}). Retrying in {current_delay}s "
                     f"(attempt {attempt + 1}/{retries + 1})..."

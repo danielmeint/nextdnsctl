@@ -11,4 +11,4 @@ jobs:
         with:
           python-version: '3.x'
       - run: pip install flake8
-      - run: flake8 . --max-line-length=100
+      - run: flake8 . --max-line-length=120
