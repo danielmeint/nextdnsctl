@@ -38,7 +38,8 @@ def _perform_domain_operations(
             click.echo(result)
         except RateLimitStillActiveError as e:
             click.echo(
-                f"\nCRITICAL ERROR: Domain '{item_value}' could not be {action_verb}ed due to persistent rate limiting.",
+                f"\nCRITICAL ERROR: Domain '{item_value}' could not be {action_verb}ed "
+                f"due to persistent rate limiting.",
                 err=True,
             )
             click.echo(f"Detail: {e}", err=True)
@@ -53,7 +54,8 @@ def _perform_domain_operations(
             )
     if not all_successful and failure_count > 0:
         click.echo(
-            f"\nWarning: {failure_count} {item_name_singular}(s) could not be {action_verb}ed due to other errors.",
+            f"\nWarning: {failure_count} {item_name_singular}(s) could not be {action_verb}ed "
+            f"due to other errors.",
             err=True,
         )
     return all_successful

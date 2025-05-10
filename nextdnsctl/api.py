@@ -43,12 +43,14 @@ def api_call(
                     if retry_after_header:
                         sleep_time = int(retry_after_header)
                         print(
-                            f"Rate limited by API (Retry-After: {sleep_time}s). Retrying attempt {attempt + 1}/{retries +1 }..."
+                            f"Rate limited by API (Retry-After: {sleep_time}s). "
+                            f"Retrying attempt {attempt + 1}/{retries +1 }..."
                         )
                     else:
                         sleep_time = DEFAULT_PATIENT_RETRY_PAUSE_SECONDS
                         print(
-                            f"Rate limit hit (no Retry-After). Pausing for {sleep_time}s before attempt {attempt + 1}/{retries + 1}..."
+                            f"Rate limit hit (no Retry-After). "
+                            f"Pausing for {sleep_time}s before attempt {attempt + 1}/{retries + 1}..."
                         )
                     time.sleep(sleep_time)
                     continue  # Retry the current request
@@ -56,11 +58,15 @@ def api_call(
                     # If it's still a 429 on the last attempt, even without Retry-After, it's a persistent issue
                     if not retry_after_header:
                         raise RateLimitStillActiveError(
-                            f"API rate limit still active after {retries + 1} attempts and significant pauses."
+                            "API rate limit still active after "
+                            f"{retries + 1} attempts"
+                            " and significant pauses."
                         )
                     else:
                         raise Exception(
-                            f"API rate limit exceeded after {retries + 1} attempts (Retry-After was {retry_after_header}s on last attempt)."
+                            "API rate limit exceeded after "
+                            f"{retries + 1} attempts (Retry-After was "
+                            f"{retry_after_header}s on last attempt)."
                         )
 
             # Accept 200, 201, and 204 as success statuses
@@ -69,7 +75,8 @@ def api_call(
                 if response.status_code >= 500 and attempt < retries:
                     current_delay = delay * (2**attempt)
                     print(
-                        f"Server error ({response.status_code}). Retrying in {current_delay}s (attempt {attempt + 1}/{retries + 1})..."
+                        f"Server error ({response.status_code}). Retrying in {current_delay}s "
+                        f"(attempt {attempt + 1}/{retries + 1})..."
                     )
                     time.sleep(current_delay)
                     continue  # Retry the current request
@@ -88,7 +95,8 @@ def api_call(
                     )
                 except ValueError:
                     raise Exception(
-                        f"API request failed with status {response.status_code} and non-JSON response."
+                        f"API request failed with status {response.status_code} "
+                        f"and non-JSON response."
                     )
 
             if response.status_code == 204:
@@ -99,7 +107,8 @@ def api_call(
             if attempt < retries:
                 current_delay = delay * (2**attempt)
                 print(
-                    f"Network error ({e}). Retrying in {current_delay}s (attempt {attempt + 1}/{retries + 1})..."
+                    f"Network error ({e}). Retrying in {current_delay}s "
+                    f"(attempt {attempt + 1}/{retries + 1})..."
                 )
                 time.sleep(current_delay)
                 continue
