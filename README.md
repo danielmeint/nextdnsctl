@@ -17,7 +17,7 @@ A community-driven CLI tool for managing NextDNS profiles declaratively.
 1. Install Python 3.6+.
 2. Clone or install:
    ```bash
-   pip install git+https://github.com/danielmeint/nextdnsctl.git
+   pip install nextdnsctl
    ```
 
 ## Usage
