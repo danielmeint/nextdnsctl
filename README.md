@@ -7,6 +7,8 @@ A community-driven CLI tool for managing NextDNS profiles declaratively.
 
 **Disclaimer**: This is an unofficial tool, not affiliated with NextDNS. Built by a user, for users.
 
+> ⚠️ **Note**: While `nextdnsctl` now handles API rate limiting and retries, it is **not recommended for importing very large blocklists**. For large-scale filtering, prefer using NextDNS’s built-in curated blocklists under the **Privacy** tab, and use the `denylist` feature for specific overrides or fine-tuning.
+
 ## Features
 - Bulk add/remove domains to the NextDNS denylist and allowlist.
 - Import domains from a file or URL to the denylist and allowlist.
