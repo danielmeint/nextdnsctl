@@ -37,8 +37,16 @@ def _perform_domain_operations(
     Exits script if RateLimitStillActiveError is encountered.
 
     Supports parallel execution when concurrency > 1.
+    Supports dry-run mode to show what would be done without making changes.
     """
+    dry_run = ctx.obj.get("dry_run", False)
     concurrency = ctx.obj.get("concurrency", DEFAULT_CONCURRENCY)
+
+    # Dry-run mode: just show what would be done
+    if dry_run:
+        return _perform_domain_operations_dry_run(
+            domains_to_process, item_name_singular, action_verb
+        )
 
     # Sequential mode (concurrency == 1): preserve original verbose behavior
     if concurrency == 1:
@@ -55,6 +63,19 @@ def _perform_domain_operations(
         action_verb,
         concurrency,
     )
+
+
+def _perform_domain_operations_dry_run(
+    domains_to_process,
+    item_name_singular,
+    action_verb,
+):
+    """Dry-run mode: show what would be done without making changes."""
+    click.echo(f"[DRY-RUN] Would {action_verb} {len(domains_to_process)} {item_name_singular}(s):")
+    for domain in domains_to_process:
+        click.echo(f"  - {domain}")
+    click.echo("\n[DRY-RUN] No changes made.", err=True)
+    return True
 
 
 def _perform_domain_operations_sequential(
@@ -197,14 +218,20 @@ def _perform_domain_operations_parallel(
     help=f"Number of concurrent API requests. Default: {DEFAULT_CONCURRENCY}",
     show_default=True,
 )
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what would be done without making changes",
+)
 @click.pass_context
-def cli(ctx, retry_attempts, retry_delay, timeout, concurrency):
+def cli(ctx, retry_attempts, retry_delay, timeout, concurrency, dry_run):
     """nextdnsctl: A CLI tool for managing NextDNS profiles."""
     ctx.obj = {
         "retry_attempts": retry_attempts,
         "retry_delay": retry_delay,
         "timeout": timeout,
         "concurrency": concurrency,
+        "dry_run": dry_run,
     }
 
 
@@ -385,6 +412,99 @@ def denylist_import(ctx, profile_id, source, inactive):
         ctx.exit(1)
 
 
+@denylist.command("export")
+@click.argument("profile_id")
+@click.argument("output", type=click.Path(), default="-")
+@click.option("--active-only", is_flag=True, help="Export only active entries")
+@click.option("--inactive-only", is_flag=True, help="Export only inactive entries")
+@click.pass_context
+def denylist_export(ctx, profile_id, output, active_only, inactive_only):
+    """Export denylist domains to a file (or stdout with -)."""
+    try:
+        api_params = {
+            "retries": ctx.obj["retry_attempts"],
+            "delay": ctx.obj["retry_delay"],
+            "timeout": ctx.obj["timeout"],
+        }
+        entries = get_denylist(profile_id, **api_params)
+        if not entries:
+            click.echo("Denylist is empty, nothing to export.", err=True)
+            return
+
+        # Filter by active status if requested
+        if active_only:
+            entries = [e for e in entries if e.get("active", True)]
+        elif inactive_only:
+            entries = [e for e in entries if not e.get("active", True)]
+
+        if not entries:
+            click.echo("No matching entries to export.", err=True)
+            return
+
+        domains = [entry.get("id", "") for entry in entries if entry.get("id")]
+        content = "\n".join(domains) + "\n"
+
+        if output == "-":
+            click.echo(content, nl=False)
+        else:
+            with open(output, "w") as f:
+                f.write(content)
+            click.echo(f"Exported {len(domains)} domains to {output}", err=True)
+    except Exception as e:
+        click.echo(f"Error exporting denylist: {e}", err=True)
+        raise click.Abort()
+
+
+@denylist.command("clear")
+@click.argument("profile_id")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
+@click.pass_context
+def denylist_clear(ctx, profile_id, yes):
+    """Remove all domains from the denylist."""
+    try:
+        api_params = {
+            "retries": ctx.obj["retry_attempts"],
+            "delay": ctx.obj["retry_delay"],
+            "timeout": ctx.obj["timeout"],
+        }
+        entries = get_denylist(profile_id, **api_params)
+        if not entries:
+            click.echo("Denylist is already empty.")
+            return
+
+        domains = [entry.get("id") for entry in entries if entry.get("id")]
+        if not domains:
+            click.echo("Denylist is already empty.")
+            return
+
+        dry_run = ctx.obj.get("dry_run", False)
+        if not yes and not dry_run:
+            click.confirm(
+                f"This will remove {len(domains)} domains from the denylist. Continue?",
+                abort=True,
+            )
+
+        def operation(domain_name):
+            return remove_from_denylist(
+                profile_id,
+                domain_name,
+                retries=ctx.obj["retry_attempts"],
+                delay=ctx.obj["retry_delay"],
+                timeout=ctx.obj["timeout"],
+            )
+
+        success = _perform_domain_operations(
+            ctx, domains, operation, item_name_singular="domain", action_verb="remove"
+        )
+        if not success:
+            ctx.exit(1)
+    except click.Abort:
+        raise
+    except Exception as e:
+        click.echo(f"Error clearing denylist: {e}", err=True)
+        raise click.Abort()
+
+
 def read_source(source):
     """Read content from a file or URL."""
     if source.startswith("http://") or source.startswith("https://"):
@@ -538,6 +658,99 @@ def allowlist_import(ctx, profile_id, source, inactive):
     )
     if not success:
         ctx.exit(1)
+
+
+@allowlist.command("export")
+@click.argument("profile_id")
+@click.argument("output", type=click.Path(), default="-")
+@click.option("--active-only", is_flag=True, help="Export only active entries")
+@click.option("--inactive-only", is_flag=True, help="Export only inactive entries")
+@click.pass_context
+def allowlist_export(ctx, profile_id, output, active_only, inactive_only):
+    """Export allowlist domains to a file (or stdout with -)."""
+    try:
+        api_params = {
+            "retries": ctx.obj["retry_attempts"],
+            "delay": ctx.obj["retry_delay"],
+            "timeout": ctx.obj["timeout"],
+        }
+        entries = get_allowlist(profile_id, **api_params)
+        if not entries:
+            click.echo("Allowlist is empty, nothing to export.", err=True)
+            return
+
+        # Filter by active status if requested
+        if active_only:
+            entries = [e for e in entries if e.get("active", True)]
+        elif inactive_only:
+            entries = [e for e in entries if not e.get("active", True)]
+
+        if not entries:
+            click.echo("No matching entries to export.", err=True)
+            return
+
+        domains = [entry.get("id", "") for entry in entries if entry.get("id")]
+        content = "\n".join(domains) + "\n"
+
+        if output == "-":
+            click.echo(content, nl=False)
+        else:
+            with open(output, "w") as f:
+                f.write(content)
+            click.echo(f"Exported {len(domains)} domains to {output}", err=True)
+    except Exception as e:
+        click.echo(f"Error exporting allowlist: {e}", err=True)
+        raise click.Abort()
+
+
+@allowlist.command("clear")
+@click.argument("profile_id")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
+@click.pass_context
+def allowlist_clear(ctx, profile_id, yes):
+    """Remove all domains from the allowlist."""
+    try:
+        api_params = {
+            "retries": ctx.obj["retry_attempts"],
+            "delay": ctx.obj["retry_delay"],
+            "timeout": ctx.obj["timeout"],
+        }
+        entries = get_allowlist(profile_id, **api_params)
+        if not entries:
+            click.echo("Allowlist is already empty.")
+            return
+
+        domains = [entry.get("id") for entry in entries if entry.get("id")]
+        if not domains:
+            click.echo("Allowlist is already empty.")
+            return
+
+        dry_run = ctx.obj.get("dry_run", False)
+        if not yes and not dry_run:
+            click.confirm(
+                f"This will remove {len(domains)} domains from the allowlist. Continue?",
+                abort=True,
+            )
+
+        def operation(domain_name):
+            return remove_from_allowlist(
+                profile_id,
+                domain_name,
+                retries=ctx.obj["retry_attempts"],
+                delay=ctx.obj["retry_delay"],
+                timeout=ctx.obj["timeout"],
+            )
+
+        success = _perform_domain_operations(
+            ctx, domains, operation, item_name_singular="domain", action_verb="remove"
+        )
+        if not success:
+            ctx.exit(1)
+    except click.Abort:
+        raise
+    except Exception as e:
+        click.echo(f"Error clearing allowlist: {e}", err=True)
+        raise click.Abort()
 
 
 if __name__ == "__main__":
