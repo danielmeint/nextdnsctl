@@ -1,3 +1,6 @@
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import click
 import requests
 
@@ -15,6 +18,7 @@ from .api import (
 )
 
 __version__ = "0.2.0"
+DEFAULT_CONCURRENCY = 5
 
 
 # Helper function to perform operations on a list of domains
@@ -29,7 +33,36 @@ def _perform_domain_operations(
     Iterates over a list of items (e.g., domains) and performs an operation on each.
     Returns True if all non-critical operations were successful, False otherwise.
     Exits script if RateLimitStillActiveError is encountered.
+
+    Supports parallel execution when concurrency > 1.
     """
+    concurrency = ctx.obj.get("concurrency", DEFAULT_CONCURRENCY)
+
+    # Sequential mode (concurrency == 1): preserve original verbose behavior
+    if concurrency == 1:
+        return _perform_domain_operations_sequential(
+            ctx, domains_to_process, operation_callable, item_name_singular, action_verb
+        )
+
+    # Parallel mode
+    return _perform_domain_operations_parallel(
+        ctx,
+        domains_to_process,
+        operation_callable,
+        item_name_singular,
+        action_verb,
+        concurrency,
+    )
+
+
+def _perform_domain_operations_sequential(
+    ctx,
+    domains_to_process,
+    operation_callable,
+    item_name_singular,
+    action_verb,
+):
+    """Sequential execution with verbose per-domain output (original behavior)."""
     all_successful = True
     failure_count = 0
     for item_value in domains_to_process:
@@ -61,6 +94,77 @@ def _perform_domain_operations(
     return all_successful
 
 
+def _perform_domain_operations_parallel(
+    ctx,
+    domains_to_process,
+    operation_callable,
+    item_name_singular,
+    action_verb,
+    concurrency,
+):
+    """Parallel execution with progress bar and summary output."""
+    rate_limit_hit = threading.Event()
+    results = {"success": 0, "failed": 0, "skipped": 0}
+    errors = []  # Collect errors to print after progress bar
+    rate_limit_aborted = False
+
+    total_domains = len(domains_to_process)
+
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = {}
+        for domain in domains_to_process:
+            if rate_limit_hit.is_set():
+                results["skipped"] += 1
+                continue
+            futures[executor.submit(operation_callable, domain)] = domain
+
+        submitted_count = len(futures)
+
+        with click.progressbar(
+            length=submitted_count,
+            label=f"Processing {item_name_singular}s",
+            show_pos=True,
+        ) as bar:
+            for future in as_completed(futures):
+                domain = futures[future]
+                try:
+                    future.result()
+                    results["success"] += 1
+                except RateLimitStillActiveError as e:
+                    rate_limit_hit.set()
+                    rate_limit_aborted = True
+                    results["failed"] += 1
+                    errors.append(
+                        f"CRITICAL: '{domain}' - persistent rate limiting: {e}"
+                    )
+                except Exception as e:
+                    results["failed"] += 1
+                    errors.append(f"Failed to {action_verb} '{domain}': {e}")
+                bar.update(1)
+
+    # Print any errors that occurred
+    for error in errors:
+        click.echo(error, err=True)
+
+    # Print summary
+    click.echo(
+        f"\nCompleted: {results['success']}, "
+        f"Failed: {results['failed']}, "
+        f"Skipped: {results['skipped']} "
+        f"(of {total_domains} total)"
+    )
+
+    if rate_limit_aborted:
+        click.echo(
+            "Operation aborted due to persistent rate limiting. "
+            f"{results['skipped']} {item_name_singular}(s) were not attempted.",
+            err=True,
+        )
+        ctx.exit(1)
+
+    return results["failed"] == 0
+
+
 @click.group()
 @click.version_option(__version__)
 @click.option(
@@ -84,13 +188,21 @@ def _perform_domain_operations(
     help=f"Request timeout (in seconds) for API calls. Default: {DEFAULT_TIMEOUT}",
     show_default=True,
 )
+@click.option(
+    "--concurrency",
+    type=click.IntRange(1, 20),
+    default=DEFAULT_CONCURRENCY,
+    help=f"Number of concurrent API requests. Default: {DEFAULT_CONCURRENCY}",
+    show_default=True,
+)
 @click.pass_context
-def cli(ctx, retry_attempts, retry_delay, timeout):
+def cli(ctx, retry_attempts, retry_delay, timeout, concurrency):
     """nextdnsctl: A CLI tool for managing NextDNS profiles."""
     ctx.obj = {
         "retry_attempts": retry_attempts,
         "retry_delay": retry_delay,
         "timeout": timeout,
+        "concurrency": concurrency,
     }
 
 
