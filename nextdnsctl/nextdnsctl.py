@@ -7,8 +7,10 @@ import requests
 from .config import save_api_key, load_api_key
 from .api import (
     get_profiles,
+    get_denylist,
     add_to_denylist,
     remove_from_denylist,
+    get_allowlist,
     add_to_allowlist,
     remove_from_allowlist,
     DEFAULT_RETRIES,
@@ -246,6 +248,46 @@ def denylist():
     """Manage the NextDNS denylist."""
 
 
+@denylist.command("list")
+@click.argument("profile_id")
+@click.option("--active-only", is_flag=True, help="Show only active entries")
+@click.option("--inactive-only", is_flag=True, help="Show only inactive entries")
+@click.pass_context
+def denylist_list(ctx, profile_id, active_only, inactive_only):
+    """List all domains in the NextDNS denylist."""
+    try:
+        api_params = {
+            "retries": ctx.obj["retry_attempts"],
+            "delay": ctx.obj["retry_delay"],
+            "timeout": ctx.obj["timeout"],
+        }
+        entries = get_denylist(profile_id, **api_params)
+        if not entries:
+            click.echo("Denylist is empty.")
+            return
+
+        # Filter by active status if requested
+        if active_only:
+            entries = [e for e in entries if e.get("active", True)]
+        elif inactive_only:
+            entries = [e for e in entries if not e.get("active", True)]
+
+        if not entries:
+            click.echo("No matching entries found.")
+            return
+
+        for entry in entries:
+            domain = entry.get("id", "unknown")
+            active = entry.get("active", True)
+            status = "" if active else " (inactive)"
+            click.echo(f"{domain}{status}")
+
+        click.echo(f"\nTotal: {len(entries)} entries", err=True)
+    except Exception as e:
+        click.echo(f"Error fetching denylist: {e}", err=True)
+        raise click.Abort()
+
+
 @denylist.command("add")
 @click.argument("profile_id")
 @click.argument("domains", nargs=-1)
@@ -359,6 +401,46 @@ def read_source(source):
 @cli.group("allowlist")
 def allowlist():
     """Manage the NextDNS allowlist."""
+
+
+@allowlist.command("list")
+@click.argument("profile_id")
+@click.option("--active-only", is_flag=True, help="Show only active entries")
+@click.option("--inactive-only", is_flag=True, help="Show only inactive entries")
+@click.pass_context
+def allowlist_list(ctx, profile_id, active_only, inactive_only):
+    """List all domains in the NextDNS allowlist."""
+    try:
+        api_params = {
+            "retries": ctx.obj["retry_attempts"],
+            "delay": ctx.obj["retry_delay"],
+            "timeout": ctx.obj["timeout"],
+        }
+        entries = get_allowlist(profile_id, **api_params)
+        if not entries:
+            click.echo("Allowlist is empty.")
+            return
+
+        # Filter by active status if requested
+        if active_only:
+            entries = [e for e in entries if e.get("active", True)]
+        elif inactive_only:
+            entries = [e for e in entries if not e.get("active", True)]
+
+        if not entries:
+            click.echo("No matching entries found.")
+            return
+
+        for entry in entries:
+            domain = entry.get("id", "unknown")
+            active = entry.get("active", True)
+            status = "" if active else " (inactive)"
+            click.echo(f"{domain}{status}")
+
+        click.echo(f"\nTotal: {len(entries)} entries", err=True)
+    except Exception as e:
+        click.echo(f"Error fetching allowlist: {e}", err=True)
+        raise click.Abort()
 
 
 @allowlist.command("add")
