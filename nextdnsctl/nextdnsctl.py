@@ -23,6 +23,49 @@ __version__ = "0.2.0"
 DEFAULT_CONCURRENCY = 5
 
 
+def _resolve_profile_id(ctx, profile_identifier):
+    """
+    Resolve a profile identifier (ID or name) to a profile ID.
+
+    If the identifier matches an existing profile ID, return it directly.
+    Otherwise, search for a profile with a matching name.
+    Caches the profiles list in ctx.obj to avoid repeated API calls.
+    """
+    api_params = {
+        "retries": ctx.obj["retry_attempts"],
+        "delay": ctx.obj["retry_delay"],
+        "timeout": ctx.obj["timeout"],
+    }
+
+    # Get or fetch profiles (cache in ctx.obj)
+    if "profiles_cache" not in ctx.obj:
+        try:
+            ctx.obj["profiles_cache"] = get_profiles(**api_params)
+        except Exception as e:
+            raise click.ClickException(f"Failed to fetch profiles: {e}")
+
+    profiles = ctx.obj["profiles_cache"]
+
+    # First, check if it's a direct ID match
+    for profile in profiles:
+        if profile.get("id") == profile_identifier:
+            return profile_identifier
+
+    # Otherwise, search by name (case-insensitive)
+    for profile in profiles:
+        if profile.get("name", "").lower() == profile_identifier.lower():
+            return profile["id"]
+
+    # No match found
+    available = ", ".join(
+        f"'{p.get('name')}' ({p.get('id')})" for p in profiles
+    )
+    raise click.ClickException(
+        f"Profile '{profile_identifier}' not found. "
+        f"Available profiles: {available}"
+    )
+
+
 # Helper function to perform operations on a list of domains
 def _perform_domain_operations(
     ctx,
@@ -276,13 +319,14 @@ def denylist():
 
 
 @denylist.command("list")
-@click.argument("profile_id")
+@click.argument("profile")
 @click.option("--active-only", is_flag=True, help="Show only active entries")
 @click.option("--inactive-only", is_flag=True, help="Show only inactive entries")
 @click.pass_context
-def denylist_list(ctx, profile_id, active_only, inactive_only):
+def denylist_list(ctx, profile, active_only, inactive_only):
     """List all domains in the NextDNS denylist."""
     try:
+        profile_id = _resolve_profile_id(ctx, profile)
         api_params = {
             "retries": ctx.obj["retry_attempts"],
             "delay": ctx.obj["retry_delay"],
@@ -316,15 +360,17 @@ def denylist_list(ctx, profile_id, active_only, inactive_only):
 
 
 @denylist.command("add")
-@click.argument("profile_id")
+@click.argument("profile")
 @click.argument("domains", nargs=-1)
 @click.option("--inactive", is_flag=True, help="Add domains as inactive (not blocked)")
 @click.pass_context
-def denylist_add(ctx, profile_id, domains, inactive):
+def denylist_add(ctx, profile, domains, inactive):
     """Add domains to the NextDNS denylist."""
     if not domains:
         click.echo("No domains provided.", err=True)
         raise click.Abort()
+
+    profile_id = _resolve_profile_id(ctx, profile)
 
     def operation(domain_name):
         return add_to_denylist(
@@ -344,14 +390,16 @@ def denylist_add(ctx, profile_id, domains, inactive):
 
 
 @denylist.command("remove")
-@click.argument("profile_id")
+@click.argument("profile")
 @click.argument("domains", nargs=-1)
 @click.pass_context
-def denylist_remove(ctx, profile_id, domains):
+def denylist_remove(ctx, profile, domains):
     """Remove domains from the NextDNS denylist."""
     if not domains:
         click.echo("No domains provided.", err=True)
         raise click.Abort()
+
+    profile_id = _resolve_profile_id(ctx, profile)
 
     def operation(domain_name):
         return remove_from_denylist(
@@ -370,12 +418,14 @@ def denylist_remove(ctx, profile_id, domains):
 
 
 @denylist.command("import")
-@click.argument("profile_id")
+@click.argument("profile")
 @click.argument("source")
 @click.option("--inactive", is_flag=True, help="Add domains as inactive (not blocked)")
 @click.pass_context
-def denylist_import(ctx, profile_id, source, inactive):
+def denylist_import(ctx, profile, source, inactive):
     """Import domains from a file or URL to the NextDNS denylist."""
+    profile_id = _resolve_profile_id(ctx, profile)
+
     try:
         content = read_source(source)
     except Exception as e:
@@ -413,14 +463,15 @@ def denylist_import(ctx, profile_id, source, inactive):
 
 
 @denylist.command("export")
-@click.argument("profile_id")
+@click.argument("profile")
 @click.argument("output", type=click.Path(), default="-")
 @click.option("--active-only", is_flag=True, help="Export only active entries")
 @click.option("--inactive-only", is_flag=True, help="Export only inactive entries")
 @click.pass_context
-def denylist_export(ctx, profile_id, output, active_only, inactive_only):
+def denylist_export(ctx, profile, output, active_only, inactive_only):
     """Export denylist domains to a file (or stdout with -)."""
     try:
+        profile_id = _resolve_profile_id(ctx, profile)
         api_params = {
             "retries": ctx.obj["retry_attempts"],
             "delay": ctx.obj["retry_delay"],
@@ -456,12 +507,13 @@ def denylist_export(ctx, profile_id, output, active_only, inactive_only):
 
 
 @denylist.command("clear")
-@click.argument("profile_id")
+@click.argument("profile")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
 @click.pass_context
-def denylist_clear(ctx, profile_id, yes):
+def denylist_clear(ctx, profile, yes):
     """Remove all domains from the denylist."""
     try:
+        profile_id = _resolve_profile_id(ctx, profile)
         api_params = {
             "retries": ctx.obj["retry_attempts"],
             "delay": ctx.obj["retry_delay"],
@@ -524,13 +576,14 @@ def allowlist():
 
 
 @allowlist.command("list")
-@click.argument("profile_id")
+@click.argument("profile")
 @click.option("--active-only", is_flag=True, help="Show only active entries")
 @click.option("--inactive-only", is_flag=True, help="Show only inactive entries")
 @click.pass_context
-def allowlist_list(ctx, profile_id, active_only, inactive_only):
+def allowlist_list(ctx, profile, active_only, inactive_only):
     """List all domains in the NextDNS allowlist."""
     try:
+        profile_id = _resolve_profile_id(ctx, profile)
         api_params = {
             "retries": ctx.obj["retry_attempts"],
             "delay": ctx.obj["retry_delay"],
@@ -564,15 +617,17 @@ def allowlist_list(ctx, profile_id, active_only, inactive_only):
 
 
 @allowlist.command("add")
-@click.argument("profile_id")
+@click.argument("profile")
 @click.argument("domains", nargs=-1)
 @click.option("--inactive", is_flag=True, help="Add domains as inactive (not allowed)")
 @click.pass_context
-def allowlist_add(ctx, profile_id, domains, inactive):
+def allowlist_add(ctx, profile, domains, inactive):
     """Add domains to the NextDNS allowlist."""
     if not domains:
         click.echo("No domains provided.", err=True)
         raise click.Abort()
+
+    profile_id = _resolve_profile_id(ctx, profile)
 
     def operation(domain_name):
         return add_to_allowlist(
@@ -592,14 +647,16 @@ def allowlist_add(ctx, profile_id, domains, inactive):
 
 
 @allowlist.command("remove")
-@click.argument("profile_id")
+@click.argument("profile")
 @click.argument("domains", nargs=-1)
 @click.pass_context
-def allowlist_remove(ctx, profile_id, domains):
+def allowlist_remove(ctx, profile, domains):
     """Remove domains from the NextDNS allowlist."""
     if not domains:
         click.echo("No domains provided.", err=True)
         raise click.Abort()
+
+    profile_id = _resolve_profile_id(ctx, profile)
 
     def operation(domain_name):
         return remove_from_allowlist(
@@ -618,12 +675,14 @@ def allowlist_remove(ctx, profile_id, domains):
 
 
 @allowlist.command("import")
-@click.argument("profile_id")
+@click.argument("profile")
 @click.argument("source")
 @click.option("--inactive", is_flag=True, help="Add domains as inactive (not allowed)")
 @click.pass_context
-def allowlist_import(ctx, profile_id, source, inactive):
+def allowlist_import(ctx, profile, source, inactive):
     """Import domains from a file or URL to the NextDNS allowlist."""
+    profile_id = _resolve_profile_id(ctx, profile)
+
     try:
         content = read_source(source)
     except Exception as e:
@@ -661,14 +720,15 @@ def allowlist_import(ctx, profile_id, source, inactive):
 
 
 @allowlist.command("export")
-@click.argument("profile_id")
+@click.argument("profile")
 @click.argument("output", type=click.Path(), default="-")
 @click.option("--active-only", is_flag=True, help="Export only active entries")
 @click.option("--inactive-only", is_flag=True, help="Export only inactive entries")
 @click.pass_context
-def allowlist_export(ctx, profile_id, output, active_only, inactive_only):
+def allowlist_export(ctx, profile, output, active_only, inactive_only):
     """Export allowlist domains to a file (or stdout with -)."""
     try:
+        profile_id = _resolve_profile_id(ctx, profile)
         api_params = {
             "retries": ctx.obj["retry_attempts"],
             "delay": ctx.obj["retry_delay"],
@@ -704,12 +764,13 @@ def allowlist_export(ctx, profile_id, output, active_only, inactive_only):
 
 
 @allowlist.command("clear")
-@click.argument("profile_id")
+@click.argument("profile")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
 @click.pass_context
-def allowlist_clear(ctx, profile_id, yes):
+def allowlist_clear(ctx, profile, yes):
     """Remove all domains from the allowlist."""
     try:
+        profile_id = _resolve_profile_id(ctx, profile)
         api_params = {
             "retries": ctx.obj["retry_attempts"],
             "delay": ctx.obj["retry_delay"],
