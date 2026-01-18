@@ -62,9 +62,7 @@ def _resolve_profile_id(ctx: click.Context, profile_identifier: str) -> str:
 
     # No match found
     available = ", ".join(f"'{p.get('name')}' ({p.get('id')})" for p in profiles)
-    raise click.ClickException(
-        f"Profile '{profile_identifier}' not found. " f"Available profiles: {available}"
-    )
+    raise click.ClickException(f"Profile '{profile_identifier}' not found. " f"Available profiles: {available}")
 
 
 def _validate_domains(domains: Sequence[str]) -> tuple[list[str], list[str]]:
@@ -106,9 +104,7 @@ def _perform_domain_operations(
 
     # Dry-run mode: just show what would be done
     if dry_run:
-        return _perform_domain_operations_dry_run(
-            domains_to_process, item_name_singular, action_verb
-        )
+        return _perform_domain_operations_dry_run(domains_to_process, item_name_singular, action_verb)
 
     # Sequential mode (concurrency == 1): preserve original verbose behavior
     if concurrency == 1:
@@ -133,9 +129,7 @@ def _perform_domain_operations_dry_run(
     action_verb: str,
 ) -> bool:
     """Dry-run mode: show what would be done without making changes."""
-    click.echo(
-        f"[DRY-RUN] Would {action_verb} {len(domains_to_process)} {item_name_singular}(s):"
-    )
+    click.echo(f"[DRY-RUN] Would {action_verb} {len(domains_to_process)} {item_name_singular}(s):")
     for domain in domains_to_process:
         click.echo(f"  - {domain}")
     click.echo("\n[DRY-RUN] No changes made.", err=True)
@@ -174,8 +168,7 @@ def _perform_domain_operations_sequential(
             )
     if not all_successful and failure_count > 0:
         click.echo(
-            f"\nWarning: {failure_count} {item_name_singular}(s) could not be {action_verb}ed "
-            f"due to other errors.",
+            f"\nWarning: {failure_count} {item_name_singular}(s) could not be {action_verb}ed " f"due to other errors.",
             err=True,
         )
     return all_successful
@@ -222,9 +215,7 @@ def _perform_domain_operations_parallel(
                     rate_limit_hit.set()
                     rate_limit_aborted = True
                     results["failed"] += 1
-                    errors.append(
-                        f"CRITICAL: '{domain}' - persistent rate limiting: {e}"
-                    )
+                    errors.append(f"CRITICAL: '{domain}' - persistent rate limiting: {e}")
                 except Exception as e:
                     results["failed"] += 1
                     errors.append(f"Failed to {action_verb} '{domain}': {e}")
@@ -339,9 +330,7 @@ def auth(api_key):
 def profile_list(ctx):
     """List all NextDNS profiles."""
     if "client" not in ctx.obj:
-        raise click.ClickException(
-            "No API key configured. Run 'nextdnsctl auth <api_key>' first."
-        )
+        raise click.ClickException("No API key configured. Run 'nextdnsctl auth <api_key>' first.")
     try:
         client: APIClient = ctx.obj["client"]
         profiles = client.get_profiles()
@@ -398,9 +387,7 @@ def _handle_list_command(
 ) -> None:
     """Shared handler for list commands."""
     if "client" not in ctx.obj:
-        raise click.ClickException(
-            "No API key configured. Run 'nextdnsctl auth <api_key>' first."
-        )
+        raise click.ClickException("No API key configured. Run 'nextdnsctl auth <api_key>' first.")
     try:
         profile_id = _resolve_profile_id(ctx, profile)
         client: APIClient = ctx.obj["client"]
@@ -439,9 +426,7 @@ def _handle_add_command(
 ) -> None:
     """Shared handler for add commands."""
     if "client" not in ctx.obj:
-        raise click.ClickException(
-            "No API key configured. Run 'nextdnsctl auth <api_key>' first."
-        )
+        raise click.ClickException("No API key configured. Run 'nextdnsctl auth <api_key>' first.")
     if not domains:
         click.echo("No domains provided.", err=True)
         raise click.Abort()
@@ -468,9 +453,7 @@ def _handle_add_command(
             active=not inactive,
         )
 
-    success = _perform_domain_operations(
-        ctx, valid_domains, operation, item_name_singular="domain", action_verb="add"
-    )
+    success = _perform_domain_operations(ctx, valid_domains, operation, item_name_singular="domain", action_verb="add")
     if not success:
         ctx.exit(1)
 
@@ -483,9 +466,7 @@ def _handle_remove_command(
 ) -> None:
     """Shared handler for remove commands."""
     if "client" not in ctx.obj:
-        raise click.ClickException(
-            "No API key configured. Run 'nextdnsctl auth <api_key>' first."
-        )
+        raise click.ClickException("No API key configured. Run 'nextdnsctl auth <api_key>' first.")
     if not domains:
         click.echo("No domains provided.", err=True)
         raise click.Abort()
@@ -500,9 +481,7 @@ def _handle_remove_command(
             domain_name,
         )
 
-    success = _perform_domain_operations(
-        ctx, domains, operation, item_name_singular="domain", action_verb="remove"
-    )
+    success = _perform_domain_operations(ctx, domains, operation, item_name_singular="domain", action_verb="remove")
     if not success:
         ctx.exit(1)
 
@@ -516,9 +495,7 @@ def _handle_import_command(
 ) -> None:
     """Shared handler for import commands."""
     if "client" not in ctx.obj:
-        raise click.ClickException(
-            "No API key configured. Run 'nextdnsctl auth <api_key>' first."
-        )
+        raise click.ClickException("No API key configured. Run 'nextdnsctl auth <api_key>' first.")
     profile_id = _resolve_profile_id(ctx, profile)
     client: APIClient = ctx.obj["client"]
 
@@ -572,17 +549,13 @@ def _handle_export_command(
 ) -> None:
     """Shared handler for export commands."""
     if "client" not in ctx.obj:
-        raise click.ClickException(
-            "No API key configured. Run 'nextdnsctl auth <api_key>' first."
-        )
+        raise click.ClickException("No API key configured. Run 'nextdnsctl auth <api_key>' first.")
     try:
         profile_id = _resolve_profile_id(ctx, profile)
         client: APIClient = ctx.obj["client"]
         entries = client.get_domain_list(profile_id, list_type)
         if not entries:
-            click.echo(
-                f"{list_type.capitalize()} is empty, nothing to export.", err=True
-            )
+            click.echo(f"{list_type.capitalize()} is empty, nothing to export.", err=True)
             return
 
         if active_only:
@@ -616,9 +589,7 @@ def _handle_clear_command(
 ) -> None:
     """Shared handler for clear commands."""
     if "client" not in ctx.obj:
-        raise click.ClickException(
-            "No API key configured. Run 'nextdnsctl auth <api_key>' first."
-        )
+        raise click.ClickException("No API key configured. Run 'nextdnsctl auth <api_key>' first.")
     try:
         profile_id = _resolve_profile_id(ctx, profile)
         client: APIClient = ctx.obj["client"]
@@ -635,8 +606,7 @@ def _handle_clear_command(
         dry_run = ctx.obj.get("dry_run", False)
         if not yes and not dry_run:
             click.confirm(
-                f"This will remove {len(domains)} domains from the {list_type}. "
-                "Continue?",
+                f"This will remove {len(domains)} domains from the {list_type}. " "Continue?",
                 abort=True,
             )
 
@@ -647,9 +617,7 @@ def _handle_clear_command(
                 domain_name,
             )
 
-        success = _perform_domain_operations(
-            ctx, domains, operation, item_name_singular="domain", action_verb="remove"
-        )
+        success = _perform_domain_operations(ctx, domains, operation, item_name_singular="domain", action_verb="remove")
         if not success:
             ctx.exit(1)
     except click.Abort:
@@ -775,9 +743,7 @@ def allowlist_import(ctx, profile, source, inactive):
 @click.pass_context
 def allowlist_export(ctx, profile, output, active_only, inactive_only):
     """Export allowlist domains to a file (or stdout with -)."""
-    _handle_export_command(
-        ctx, profile, "allowlist", output, active_only, inactive_only
-    )
+    _handle_export_command(ctx, profile, "allowlist", output, active_only, inactive_only)
 
 
 @allowlist.command("clear")

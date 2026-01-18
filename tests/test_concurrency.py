@@ -9,9 +9,7 @@ from nextdnsctl.api import API_BASE
 class TestConcurrency:
     """Tests to verify parallel execution works correctly."""
 
-    def test_parallel_mode_uses_summary_output(
-        self, runner, mock_api_key, mock_profiles_response, tmp_path
-    ):
+    def test_parallel_mode_uses_summary_output(self, runner, mock_api_key, mock_profiles_response, tmp_path):
         """
         Verify that with concurrency > 1, parallel mode is used.
 
@@ -47,9 +45,7 @@ class TestConcurrency:
             # Should NOT show per-domain "Added" messages (that's sequential mode)
             assert "Added d1.com" not in result.output
 
-    def test_sequential_mode_shows_per_domain_output(
-        self, runner, mock_api_key, mock_profiles_response, tmp_path
-    ):
+    def test_sequential_mode_shows_per_domain_output(self, runner, mock_api_key, mock_profiles_response, tmp_path):
         """
         Verify that with concurrency=1, sequential mode is used.
 

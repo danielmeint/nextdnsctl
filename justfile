@@ -71,6 +71,14 @@ venv:
     python3 -m venv .venv
     .venv/bin/pip install --upgrade pip
 
+# Install pre-commit hooks
+hooks:
+    .venv/bin/pre-commit install
+
+# Run pre-commit on all files
+pre-commit:
+    .venv/bin/pre-commit run --all-files
+
 # Setup development environment from scratch
-setup: venv install-deps install-dev
+setup: venv install-deps install-dev hooks
     @echo "Development environment ready!"

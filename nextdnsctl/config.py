@@ -32,13 +32,10 @@ def load_api_key() -> str:
     # Fall back to config file
     if not os.path.exists(CONFIG_FILE):
         raise ValueError(
-            f"No API key found. Set {ENV_VAR_NAME} environment variable "
-            "or run 'nextdnsctl auth <api_key>'."
+            f"No API key found. Set {ENV_VAR_NAME} environment variable " "or run 'nextdnsctl auth <api_key>'."
         )
     with open(CONFIG_FILE, "r") as f:
         config = json.load(f)
         if "api_key" not in config:
-            raise ValueError(
-                "Invalid config file. Run 'nextdnsctl auth <api_key>' to set up."
-            )
+            raise ValueError("Invalid config file. Run 'nextdnsctl auth <api_key>' to set up.")
         return config["api_key"]

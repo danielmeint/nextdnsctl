@@ -17,9 +17,7 @@ DEFAULT_PATIENT_RETRY_PAUSE_SECONDS = 60  # Pause for unspecific 429s
 
 # Domain validation regex - matches valid domain names
 # Allows letters, numbers, hyphens, and dots. Must have at least one dot.
-DOMAIN_REGEX = re.compile(
-    r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.[A-Za-z0-9-]{1,63})*\.[A-Za-z]{2,}$"
-)
+DOMAIN_REGEX = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.[A-Za-z0-9-]{1,63})*\.[A-Za-z]{2,}$")
 
 
 class RateLimitStillActiveError(Exception):
@@ -159,18 +157,11 @@ class APIClient:
                     try:
                         error_data = response.json()
                         errors = error_data.get("errors", [{"detail": "Unknown error"}])
-                        detail = (
-                            errors[0].get("detail", "Unknown error")
-                            if errors
-                            else "Unknown error"
-                        )
-                        raise Exception(
-                            f"API error: {detail} (Status: {response.status_code})"
-                        )
+                        detail = errors[0].get("detail", "Unknown error") if errors else "Unknown error"
+                        raise Exception(f"API error: {detail} (Status: {response.status_code})")
                     except ValueError:
                         raise Exception(
-                            f"API request failed with status {response.status_code} "
-                            f"and non-JSON response."
+                            f"API request failed with status {response.status_code} " f"and non-JSON response."
                         )
 
                 if response.status_code == 204:
@@ -189,9 +180,7 @@ class APIClient:
                 else:
                     raise Exception(f"Network error after {retries + 1} attempts: {e}")
 
-        raise Exception(
-            f"API call failed after {retries + 1} attempts for an unknown reason."
-        )
+        raise Exception(f"API call failed after {retries + 1} attempts for an unknown reason.")
 
     def close(self) -> None:
         """Close the session and release resources."""
@@ -231,9 +220,7 @@ class APIClient:
         self.call("POST", f"profiles/{profile_id}/{list_type}", data=data)
         return f"Added {domain} as {'active' if active else 'inactive'}"
 
-    def remove_from_domain_list(
-        self, profile_id: str, list_type: str, domain: str
-    ) -> str:
+    def remove_from_domain_list(self, profile_id: str, list_type: str, domain: str) -> str:
         """Remove a domain from a list (denylist/allowlist)."""
         self.call("DELETE", f"profiles/{profile_id}/{list_type}/{domain}")
         return f"Removed {domain}"
@@ -246,7 +233,6 @@ _client: Optional[APIClient] = None
 
 def _get_client(**kwargs: Any) -> APIClient:
     """Get or create an API client instance."""
-    global _client
     if _client is not None:
         return _client
 
@@ -291,9 +277,7 @@ def get_profiles(**kwargs: Any) -> List[Dict[str, Any]]:
     return client.get_profiles()
 
 
-def get_domain_list(
-    profile_id: str, list_type: str, **kwargs: Any
-) -> List[Dict[str, Any]]:
+def get_domain_list(profile_id: str, list_type: str, **kwargs: Any) -> List[Dict[str, Any]]:
     """Retrieve the current list (denylist/allowlist) for a profile."""
     client = _get_client(**kwargs)
     return client.get_domain_list(profile_id, list_type)
@@ -311,9 +295,7 @@ def add_to_domain_list(
     return client.add_to_domain_list(profile_id, list_type, domain, active)
 
 
-def remove_from_domain_list(
-    profile_id: str, list_type: str, domain: str, **kwargs: Any
-) -> str:
+def remove_from_domain_list(profile_id: str, list_type: str, domain: str, **kwargs: Any) -> str:
     """Remove a domain from a list (denylist/allowlist)."""
     client = _get_client(**kwargs)
     return client.remove_from_domain_list(profile_id, list_type, domain)
@@ -325,9 +307,7 @@ def get_denylist(profile_id: str, **kwargs: Any) -> List[Dict[str, Any]]:
     return get_domain_list(profile_id, "denylist", **kwargs)
 
 
-def add_to_denylist(
-    profile_id: str, domain: str, active: bool = True, **kwargs: Any
-) -> str:
+def add_to_denylist(profile_id: str, domain: str, active: bool = True, **kwargs: Any) -> str:
     """Add a domain to the denylist."""
     return add_to_domain_list(profile_id, "denylist", domain, active, **kwargs)
 
@@ -342,9 +322,7 @@ def get_allowlist(profile_id: str, **kwargs: Any) -> List[Dict[str, Any]]:
     return get_domain_list(profile_id, "allowlist", **kwargs)
 
 
-def add_to_allowlist(
-    profile_id: str, domain: str, active: bool = True, **kwargs: Any
-) -> str:
+def add_to_allowlist(profile_id: str, domain: str, active: bool = True, **kwargs: Any) -> str:
     """Add a domain to the allowlist."""
     return add_to_domain_list(profile_id, "allowlist", domain, active, **kwargs)
 
