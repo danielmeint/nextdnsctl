@@ -1,34 +1,40 @@
-import requests
 import time
+from typing import Any, Dict, List, Optional
+from urllib.parse import urljoin
+
+import requests
 from requests.exceptions import RequestException
 
+from . import __version__
 from .config import load_api_key
 
-API_BASE = "https://api.nextdns.io"
+API_BASE = "https://api.nextdns.io/"
 DEFAULT_RETRIES = 4
 DEFAULT_DELAY = 1  # For general errors or Retry-After scenarios
 DEFAULT_TIMEOUT = 10
-USER_AGENT = "nextdnsctl/0.2.0"
-DEFAULT_PATIENT_RETRY_PAUSE_SECONDS = 60  # Added: Pause for unspecific 429s
+USER_AGENT = f"nextdnsctl/{__version__}"
+DEFAULT_PATIENT_RETRY_PAUSE_SECONDS = 60  # Pause for unspecific 429s
 
 
-# Custom Exception for persistent rate limits
-class RateLimitStillActiveError(Exception):  # Added
+class RateLimitStillActiveError(Exception):
+    """Raised when API rate limit persists after all retry attempts."""
+
     pass
 
 
 def api_call(
-        method,
-        endpoint,
-        data=None,
-        retries=DEFAULT_RETRIES,
-        delay=DEFAULT_DELAY,
-        timeout=DEFAULT_TIMEOUT,
-):
+    method: str,
+    endpoint: str,
+    data: Optional[Dict[str, Any]] = None,
+    retries: int = DEFAULT_RETRIES,
+    delay: float = DEFAULT_DELAY,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> Optional[Dict[str, Any]]:
     """Make an API request to NextDNS."""
     api_key = load_api_key()
     headers = {"X-Api-Key": api_key, "User-Agent": USER_AGENT}
-    url = f"{API_BASE}{endpoint}"
+    # Use urljoin for safer URL construction
+    url = urljoin(API_BASE, endpoint.lstrip("/"))
 
     for attempt in range(retries + 1):
         try:
@@ -72,7 +78,7 @@ def api_call(
             if response.status_code not in (200, 201, 204):
                 # For server errors (5xx), retry with exponential backoff if retries are available
                 if response.status_code >= 500 and attempt < retries:
-                    current_delay = delay * (2 ** attempt)
+                    current_delay = delay * (2**attempt)
                     print(
                         f"Server error ({response.status_code}). Retrying in {current_delay}s "
                         f"(attempt {attempt + 1}/{retries + 1})..."
@@ -104,7 +110,7 @@ def api_call(
 
         except RequestException as e:
             if attempt < retries:
-                current_delay = delay * (2 ** attempt)
+                current_delay = delay * (2**attempt)
                 print(
                     f"Network error ({e}). Retrying in {current_delay}s "
                     f"(attempt {attempt + 1}/{retries + 1})..."
@@ -118,42 +124,76 @@ def api_call(
     )
 
 
-def get_profiles(**kwargs):
+def get_profiles(**kwargs: Any) -> List[Dict[str, Any]]:
     """Retrieve all NextDNS profiles."""
-    return api_call("GET", "/profiles", **kwargs)["data"]
+    response = api_call("GET", "profiles", **kwargs)
+    if response is None:
+        raise Exception("Unexpected empty response from profiles endpoint")
+    return response["data"]
 
 
-def get_denylist(profile_id, **kwargs):
+# Generic domain list functions
+def get_domain_list(
+    profile_id: str, list_type: str, **kwargs: Any
+) -> List[Dict[str, Any]]:
+    """Retrieve the current list (denylist/allowlist) for a profile."""
+    response = api_call("GET", f"profiles/{profile_id}/{list_type}", **kwargs)
+    if response is None:
+        raise Exception(f"Unexpected empty response from {list_type} endpoint")
+    return response["data"]
+
+
+def add_to_domain_list(
+    profile_id: str,
+    list_type: str,
+    domain: str,
+    active: bool = True,
+    **kwargs: Any,
+) -> str:
+    """Add a domain to a list (denylist/allowlist)."""
+    data = {"id": domain, "active": active}
+    api_call("POST", f"profiles/{profile_id}/{list_type}", data=data, **kwargs)
+    return f"Added {domain} as {'active' if active else 'inactive'}"
+
+
+def remove_from_domain_list(
+    profile_id: str, list_type: str, domain: str, **kwargs: Any
+) -> str:
+    """Remove a domain from a list (denylist/allowlist)."""
+    api_call("DELETE", f"profiles/{profile_id}/{list_type}/{domain}", **kwargs)
+    return f"Removed {domain}"
+
+
+# Convenience wrappers for backwards compatibility
+def get_denylist(profile_id: str, **kwargs: Any) -> List[Dict[str, Any]]:
     """Retrieve the current denylist for a profile."""
-    return api_call("GET", f"/profiles/{profile_id}/denylist", **kwargs)["data"]
+    return get_domain_list(profile_id, "denylist", **kwargs)
 
 
-def add_to_denylist(profile_id, domain, active=True, **kwargs):
+def add_to_denylist(
+    profile_id: str, domain: str, active: bool = True, **kwargs: Any
+) -> str:
     """Add a domain to the denylist."""
-    data = {"id": domain, "active": active}
-    api_call("POST", f"/profiles/{profile_id}/denylist", data=data, **kwargs)
-    return f"Added {domain} as {'active' if active else 'inactive'}"
+    return add_to_domain_list(profile_id, "denylist", domain, active, **kwargs)
 
 
-def remove_from_denylist(profile_id, domain, **kwargs):
+def remove_from_denylist(profile_id: str, domain: str, **kwargs: Any) -> str:
     """Remove a domain from the denylist."""
-    api_call("DELETE", f"/profiles/{profile_id}/denylist/{domain}", **kwargs)
-    return f"Removed {domain}"
+    return remove_from_domain_list(profile_id, "denylist", domain, **kwargs)
 
 
-def get_allowlist(profile_id, **kwargs):
+def get_allowlist(profile_id: str, **kwargs: Any) -> List[Dict[str, Any]]:
     """Retrieve the current allowlist for a profile."""
-    return api_call("GET", f"/profiles/{profile_id}/allowlist", **kwargs)["data"]
+    return get_domain_list(profile_id, "allowlist", **kwargs)
 
 
-def add_to_allowlist(profile_id, domain, active=True, **kwargs):
+def add_to_allowlist(
+    profile_id: str, domain: str, active: bool = True, **kwargs: Any
+) -> str:
     """Add a domain to the allowlist."""
-    data = {"id": domain, "active": active}
-    api_call("POST", f"/profiles/{profile_id}/allowlist", data=data, **kwargs)
-    return f"Added {domain} as {'active' if active else 'inactive'}"
+    return add_to_domain_list(profile_id, "allowlist", domain, active, **kwargs)
 
 
-def remove_from_allowlist(profile_id, domain, **kwargs):
+def remove_from_allowlist(profile_id: str, domain: str, **kwargs: Any) -> str:
     """Remove a domain from the allowlist."""
-    api_call("DELETE", f"/profiles/{profile_id}/allowlist/{domain}", **kwargs)
-    return f"Removed {domain}"
+    return remove_from_domain_list(profile_id, "allowlist", domain, **kwargs)
