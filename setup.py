@@ -1,8 +1,19 @@
+import re
 from setuptools import setup, find_packages
+
+
+def get_version():
+    """Read version from nextdnsctl/__init__.py without importing."""
+    with open("nextdnsctl/__init__.py") as f:
+        match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', f.read(), re.M)
+        if match:
+            return match.group(1)
+        raise RuntimeError("Version not found")
+
 
 setup(
     name="nextdnsctl",
-    version="0.3.0",
+    version=get_version(),
     packages=find_packages(),
     install_requires=[
         "requests",
@@ -21,15 +32,11 @@ setup(
     license="MIT",
     url="https://github.com/danielmeint/nextdnsctl",
     keywords=["nextdns", "cli", "dns", "security", "networking"],
-    python_requires=">=3.6",
+    python_requires=">=3.10",
     classifiers=[
-        "Development Status :: 4 - Beta",
+        "Development Status :: 5 - Production/Stable",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.6",
-        "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",

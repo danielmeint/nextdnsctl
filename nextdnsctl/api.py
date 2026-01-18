@@ -5,13 +5,14 @@ from urllib.parse import urljoin
 import requests
 from requests.exceptions import RequestException
 
+from . import __version__
 from .config import load_api_key
 
 API_BASE = "https://api.nextdns.io/"
 DEFAULT_RETRIES = 4
 DEFAULT_DELAY = 1  # For general errors or Retry-After scenarios
 DEFAULT_TIMEOUT = 10
-USER_AGENT = "nextdnsctl/0.3.0"
+USER_AGENT = f"nextdnsctl/{__version__}"
 DEFAULT_PATIENT_RETRY_PAUSE_SECONDS = 60  # Pause for unspecific 429s
 
 

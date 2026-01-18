@@ -5,6 +5,7 @@ from typing import Any, Callable, Iterator, List, Optional, Sequence, Tuple  # n
 import click
 import requests
 
+from . import __version__
 from .config import save_api_key, load_api_key
 from .api import (
     get_profiles,
@@ -16,8 +17,6 @@ from .api import (
     DEFAULT_TIMEOUT,
     RateLimitStillActiveError,
 )
-
-__version__ = "0.3.0"
 DEFAULT_CONCURRENCY = 5
 
 
