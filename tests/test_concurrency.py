@@ -9,7 +9,9 @@ from nextdnsctl.api import API_BASE
 class TestConcurrency:
     """Tests to verify parallel execution works correctly."""
 
-    def test_parallel_mode_uses_summary_output(self, runner, mock_api_key, mock_profiles_response, tmp_path):
+    def test_parallel_mode_uses_summary_output(
+        self, runner, mock_api_key, mock_profiles_response, tmp_path
+    ):
         """
         Verify that with concurrency > 1, parallel mode is used.
 
@@ -21,9 +23,22 @@ class TestConcurrency:
 
         with rm.Mocker() as m:
             m.get(f"{API_BASE}profiles", json=mock_profiles_response)
-            m.post(f"{API_BASE}profiles/abc1234/denylist", json={"id": "test", "active": True})
+            m.post(
+                f"{API_BASE}profiles/abc1234/denylist",
+                json={"id": "test", "active": True},
+            )
 
-            result = runner.invoke(cli, ["--concurrency", "3", "denylist", "import", "abc1234", str(domains_file)])
+            result = runner.invoke(
+                cli,
+                [
+                    "--concurrency",
+                    "3",
+                    "denylist",
+                    "import",
+                    "abc1234",
+                    str(domains_file),
+                ],
+            )
 
             assert result.exit_code == 0
             # Parallel mode shows summary format
@@ -32,7 +47,9 @@ class TestConcurrency:
             # Should NOT show per-domain "Added" messages (that's sequential mode)
             assert "Added d1.com" not in result.output
 
-    def test_sequential_mode_shows_per_domain_output(self, runner, mock_api_key, mock_profiles_response, tmp_path):
+    def test_sequential_mode_shows_per_domain_output(
+        self, runner, mock_api_key, mock_profiles_response, tmp_path
+    ):
         """
         Verify that with concurrency=1, sequential mode is used.
 
@@ -44,9 +61,22 @@ class TestConcurrency:
 
         with rm.Mocker() as m:
             m.get(f"{API_BASE}profiles", json=mock_profiles_response)
-            m.post(f"{API_BASE}profiles/abc1234/denylist", json={"id": "test", "active": True})
+            m.post(
+                f"{API_BASE}profiles/abc1234/denylist",
+                json={"id": "test", "active": True},
+            )
 
-            result = runner.invoke(cli, ["--concurrency", "1", "denylist", "import", "abc1234", str(domains_file)])
+            result = runner.invoke(
+                cli,
+                [
+                    "--concurrency",
+                    "1",
+                    "denylist",
+                    "import",
+                    "abc1234",
+                    str(domains_file),
+                ],
+            )
 
             assert result.exit_code == 0
             # Sequential mode shows per-domain messages

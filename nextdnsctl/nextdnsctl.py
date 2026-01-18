@@ -1,6 +1,15 @@
+import atexit
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Callable, Iterator, List, Optional, Sequence, Tuple  # noqa: F401
+from typing import (
+    Any,
+    Callable,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+)  # noqa: F401
 
 import click
 import requests
@@ -8,15 +17,17 @@ import requests
 from . import __version__
 from .config import save_api_key, load_api_key
 from .api import (
-    get_profiles,
-    get_domain_list,
-    add_to_domain_list,
-    remove_from_domain_list,
+    APIClient,
+    set_client,
+    clear_client,
+    validate_domain,
+    InvalidDomainError,
     DEFAULT_RETRIES,
     DEFAULT_DELAY,
     DEFAULT_TIMEOUT,
     RateLimitStillActiveError,
 )
+
 DEFAULT_CONCURRENCY = 5
 
 
@@ -28,16 +39,12 @@ def _resolve_profile_id(ctx: click.Context, profile_identifier: str) -> str:
     Otherwise, search for a profile with a matching name.
     Caches the profiles list in ctx.obj to avoid repeated API calls.
     """
-    api_params = {
-        "retries": ctx.obj["retry_attempts"],
-        "delay": ctx.obj["retry_delay"],
-        "timeout": ctx.obj["timeout"],
-    }
+    client: APIClient = ctx.obj["client"]
 
     # Get or fetch profiles (cache in ctx.obj)
     if "profiles_cache" not in ctx.obj:
         try:
-            ctx.obj["profiles_cache"] = get_profiles(**api_params)
+            ctx.obj["profiles_cache"] = client.get_profiles()
         except Exception as e:
             raise click.ClickException(f"Failed to fetch profiles: {e}")
 
@@ -58,6 +65,24 @@ def _resolve_profile_id(ctx: click.Context, profile_identifier: str) -> str:
     raise click.ClickException(
         f"Profile '{profile_identifier}' not found. " f"Available profiles: {available}"
     )
+
+
+def _validate_domains(domains: Sequence[str]) -> tuple[list[str], list[str]]:
+    """
+    Validate a list of domains.
+
+    Returns:
+        Tuple of (valid_domains, invalid_domains)
+    """
+    valid = []
+    invalid = []
+    for domain in domains:
+        try:
+            validated = validate_domain(domain)
+            valid.append(validated)
+        except InvalidDomainError as e:
+            invalid.append(str(e))
+    return valid, invalid
 
 
 # Helper function to perform operations on a list of domains
@@ -274,6 +299,26 @@ def cli(ctx, retry_attempts, retry_delay, timeout, concurrency, dry_run):
         "dry_run": dry_run,
     }
 
+    # Initialize API client once (except for auth command which doesn't need it)
+    # The client will be created lazily on first API call if not set here
+    if ctx.invoked_subcommand != "auth":
+        try:
+            api_key = load_api_key()
+            client = APIClient(
+                api_key,
+                retries=retry_attempts,
+                delay=retry_delay,
+                timeout=timeout,
+            )
+            ctx.obj["client"] = client
+            set_client(client)
+            # Register cleanup on exit
+            atexit.register(clear_client)
+        except ValueError:
+            # No API key configured - will fail later with helpful message
+            # if a command actually needs it
+            pass
+
 
 @cli.command()
 @click.argument("api_key")
@@ -293,13 +338,13 @@ def auth(api_key):
 @click.pass_context
 def profile_list(ctx):
     """List all NextDNS profiles."""
+    if "client" not in ctx.obj:
+        raise click.ClickException(
+            "No API key configured. Run 'nextdnsctl auth <api_key>' first."
+        )
     try:
-        api_params = {
-            "retries": ctx.obj["retry_attempts"],
-            "delay": ctx.obj["retry_delay"],
-            "timeout": ctx.obj["timeout"],
-        }
-        profiles = get_profiles(**api_params)
+        client: APIClient = ctx.obj["client"]
+        profiles = client.get_profiles()
         if not profiles:
             click.echo("No profiles found.")
             return
@@ -352,14 +397,14 @@ def _handle_list_command(
     inactive_only: bool,
 ) -> None:
     """Shared handler for list commands."""
+    if "client" not in ctx.obj:
+        raise click.ClickException(
+            "No API key configured. Run 'nextdnsctl auth <api_key>' first."
+        )
     try:
         profile_id = _resolve_profile_id(ctx, profile)
-        api_params = {
-            "retries": ctx.obj["retry_attempts"],
-            "delay": ctx.obj["retry_delay"],
-            "timeout": ctx.obj["timeout"],
-        }
-        entries = get_domain_list(profile_id, list_type, **api_params)
+        client: APIClient = ctx.obj["client"]
+        entries = client.get_domain_list(profile_id, list_type)
         if not entries:
             click.echo(f"{list_type.capitalize()} is empty.")
             return
@@ -393,25 +438,38 @@ def _handle_add_command(
     inactive: bool,
 ) -> None:
     """Shared handler for add commands."""
+    if "client" not in ctx.obj:
+        raise click.ClickException(
+            "No API key configured. Run 'nextdnsctl auth <api_key>' first."
+        )
     if not domains:
         click.echo("No domains provided.", err=True)
         raise click.Abort()
 
+    # Validate domains
+    valid_domains, invalid_domains = _validate_domains(domains)
+    if invalid_domains:
+        click.echo("Invalid domains skipped:", err=True)
+        for error in invalid_domains:
+            click.echo(f"  - {error}", err=True)
+
+    if not valid_domains:
+        click.echo("No valid domains to add.", err=True)
+        raise click.Abort()
+
     profile_id = _resolve_profile_id(ctx, profile)
+    client: APIClient = ctx.obj["client"]
 
     def operation(domain_name):
-        return add_to_domain_list(
+        return client.add_to_domain_list(
             profile_id,
             list_type,
             domain_name,
             active=not inactive,
-            retries=ctx.obj["retry_attempts"],
-            delay=ctx.obj["retry_delay"],
-            timeout=ctx.obj["timeout"],
         )
 
     success = _perform_domain_operations(
-        ctx, domains, operation, item_name_singular="domain", action_verb="add"
+        ctx, valid_domains, operation, item_name_singular="domain", action_verb="add"
     )
     if not success:
         ctx.exit(1)
@@ -424,20 +482,22 @@ def _handle_remove_command(
     domains: Tuple[str, ...],
 ) -> None:
     """Shared handler for remove commands."""
+    if "client" not in ctx.obj:
+        raise click.ClickException(
+            "No API key configured. Run 'nextdnsctl auth <api_key>' first."
+        )
     if not domains:
         click.echo("No domains provided.", err=True)
         raise click.Abort()
 
     profile_id = _resolve_profile_id(ctx, profile)
+    client: APIClient = ctx.obj["client"]
 
     def operation(domain_name):
-        return remove_from_domain_list(
+        return client.remove_from_domain_list(
             profile_id,
             list_type,
             domain_name,
-            retries=ctx.obj["retry_attempts"],
-            delay=ctx.obj["retry_delay"],
-            timeout=ctx.obj["timeout"],
         )
 
     success = _perform_domain_operations(
@@ -455,34 +515,45 @@ def _handle_import_command(
     inactive: bool,
 ) -> None:
     """Shared handler for import commands."""
+    if "client" not in ctx.obj:
+        raise click.ClickException(
+            "No API key configured. Run 'nextdnsctl auth <api_key>' first."
+        )
     profile_id = _resolve_profile_id(ctx, profile)
+    client: APIClient = ctx.obj["client"]
 
     try:
         # Use generator to stream file/URL and collect domains
         # This avoids loading raw file content into memory
-        domains_to_import = list(read_domains_from_source(source))
+        raw_domains = list(read_domains_from_source(source))
     except Exception as e:
         click.echo(f"Error reading source: {e}", err=True)
         raise click.Abort()
 
-    if not domains_to_import:
+    if not raw_domains:
         click.echo("No domains found in source.", err=True)
         return
 
+    # Validate domains
+    valid_domains, invalid_domains = _validate_domains(raw_domains)
+    if invalid_domains:
+        click.echo(f"Skipped {len(invalid_domains)} invalid domain(s).", err=True)
+
+    if not valid_domains:
+        click.echo("No valid domains to import.", err=True)
+        return
+
     def operation(domain_name):
-        return add_to_domain_list(
+        return client.add_to_domain_list(
             profile_id,
             list_type,
             domain_name,
             active=not inactive,
-            retries=ctx.obj["retry_attempts"],
-            delay=ctx.obj["retry_delay"],
-            timeout=ctx.obj["timeout"],
         )
 
     success = _perform_domain_operations(
         ctx,
-        domains_to_import,
+        valid_domains,
         operation,
         item_name_singular="domain",
         action_verb="add",
@@ -500,14 +571,14 @@ def _handle_export_command(
     inactive_only: bool,
 ) -> None:
     """Shared handler for export commands."""
+    if "client" not in ctx.obj:
+        raise click.ClickException(
+            "No API key configured. Run 'nextdnsctl auth <api_key>' first."
+        )
     try:
         profile_id = _resolve_profile_id(ctx, profile)
-        api_params = {
-            "retries": ctx.obj["retry_attempts"],
-            "delay": ctx.obj["retry_delay"],
-            "timeout": ctx.obj["timeout"],
-        }
-        entries = get_domain_list(profile_id, list_type, **api_params)
+        client: APIClient = ctx.obj["client"]
+        entries = client.get_domain_list(profile_id, list_type)
         if not entries:
             click.echo(
                 f"{list_type.capitalize()} is empty, nothing to export.", err=True
@@ -544,14 +615,14 @@ def _handle_clear_command(
     yes: bool,
 ) -> None:
     """Shared handler for clear commands."""
+    if "client" not in ctx.obj:
+        raise click.ClickException(
+            "No API key configured. Run 'nextdnsctl auth <api_key>' first."
+        )
     try:
         profile_id = _resolve_profile_id(ctx, profile)
-        api_params = {
-            "retries": ctx.obj["retry_attempts"],
-            "delay": ctx.obj["retry_delay"],
-            "timeout": ctx.obj["timeout"],
-        }
-        entries = get_domain_list(profile_id, list_type, **api_params)
+        client: APIClient = ctx.obj["client"]
+        entries = client.get_domain_list(profile_id, list_type)
         if not entries:
             click.echo(f"{list_type.capitalize()} is already empty.")
             return
@@ -570,13 +641,10 @@ def _handle_clear_command(
             )
 
         def operation(domain_name):
-            return remove_from_domain_list(
+            return client.remove_from_domain_list(
                 profile_id,
                 list_type,
                 domain_name,
-                retries=ctx.obj["retry_attempts"],
-                delay=ctx.obj["retry_delay"],
-                timeout=ctx.obj["timeout"],
             )
 
         success = _perform_domain_operations(
