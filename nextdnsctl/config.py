@@ -2,12 +2,12 @@ import json
 import os
 import stat
 
-CONFIG_DIR = os.path.expanduser("~/.nextdnsctl")
-CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
-ENV_VAR_NAME = "NEXTDNS_API_KEY"
+CONFIG_DIR: str = os.path.expanduser("~/.nextdnsctl")
+CONFIG_FILE: str = os.path.join(CONFIG_DIR, "config.json")
+ENV_VAR_NAME: str = "NEXTDNS_API_KEY"
 
 
-def save_api_key(api_key):
+def save_api_key(api_key: str) -> None:
     """Save the NextDNS API key to a local config file with secure permissions."""
     os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
     with open(CONFIG_FILE, "w") as f:
@@ -16,7 +16,7 @@ def save_api_key(api_key):
     os.chmod(CONFIG_FILE, stat.S_IRUSR | stat.S_IWUSR)
 
 
-def load_api_key():
+def load_api_key() -> str:
     """
     Load the NextDNS API key.
 

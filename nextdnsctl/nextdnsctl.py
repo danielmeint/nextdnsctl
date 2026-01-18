@@ -1,5 +1,6 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable, Iterator, List, Optional, Tuple
 
 import click
 import requests
@@ -20,7 +21,7 @@ __version__ = "0.3.0"
 DEFAULT_CONCURRENCY = 5
 
 
-def _resolve_profile_id(ctx, profile_identifier):
+def _resolve_profile_id(ctx: click.Context, profile_identifier: str) -> str:
     """
     Resolve a profile identifier (ID or name) to a profile ID.
 
@@ -54,23 +55,20 @@ def _resolve_profile_id(ctx, profile_identifier):
             return profile["id"]
 
     # No match found
-    available = ", ".join(
-        f"'{p.get('name')}' ({p.get('id')})" for p in profiles
-    )
+    available = ", ".join(f"'{p.get('name')}' ({p.get('id')})" for p in profiles)
     raise click.ClickException(
-        f"Profile '{profile_identifier}' not found. "
-        f"Available profiles: {available}"
+        f"Profile '{profile_identifier}' not found. " f"Available profiles: {available}"
     )
 
 
 # Helper function to perform operations on a list of domains
 def _perform_domain_operations(
-    ctx,
-    domains_to_process,
-    operation_callable,
-    item_name_singular="domain",
-    action_verb="process",
-):
+    ctx: click.Context,
+    domains_to_process: List[str],
+    operation_callable: Callable[[str], str],
+    item_name_singular: str = "domain",
+    action_verb: str = "process",
+) -> bool:
     """
     Iterates over a list of items (e.g., domains) and performs an operation on each.
     Returns True if all non-critical operations were successful, False otherwise.
@@ -106,12 +104,14 @@ def _perform_domain_operations(
 
 
 def _perform_domain_operations_dry_run(
-    domains_to_process,
-    item_name_singular,
-    action_verb,
-):
+    domains_to_process: List[str],
+    item_name_singular: str,
+    action_verb: str,
+) -> bool:
     """Dry-run mode: show what would be done without making changes."""
-    click.echo(f"[DRY-RUN] Would {action_verb} {len(domains_to_process)} {item_name_singular}(s):")
+    click.echo(
+        f"[DRY-RUN] Would {action_verb} {len(domains_to_process)} {item_name_singular}(s):"
+    )
     for domain in domains_to_process:
         click.echo(f"  - {domain}")
     click.echo("\n[DRY-RUN] No changes made.", err=True)
@@ -119,12 +119,12 @@ def _perform_domain_operations_dry_run(
 
 
 def _perform_domain_operations_sequential(
-    ctx,
-    domains_to_process,
-    operation_callable,
-    item_name_singular,
-    action_verb,
-):
+    ctx: click.Context,
+    domains_to_process: List[str],
+    operation_callable: Callable[[str], str],
+    item_name_singular: str,
+    action_verb: str,
+) -> bool:
     """Sequential execution with verbose per-domain output (original behavior)."""
     all_successful = True
     failure_count = 0
@@ -158,13 +158,13 @@ def _perform_domain_operations_sequential(
 
 
 def _perform_domain_operations_parallel(
-    ctx,
-    domains_to_process,
-    operation_callable,
-    item_name_singular,
-    action_verb,
-    concurrency,
-):
+    ctx: click.Context,
+    domains_to_process: List[str],
+    operation_callable: Callable[[str], str],
+    item_name_singular: str,
+    action_verb: str,
+    concurrency: int,
+) -> bool:
     """Parallel execution with progress bar and summary output."""
     rate_limit_hit = threading.Event()
     results = {"success": 0, "failed": 0, "skipped": 0}
@@ -310,7 +310,7 @@ def profile_list(ctx):
         raise click.Abort()
 
 
-def read_domains_from_source(source):
+def read_domains_from_source(source: str) -> Iterator[str]:
     """
     Read domains from a file or URL, yielding one domain per line.
 
@@ -336,7 +336,7 @@ def read_domains_from_source(source):
                     yield domain
 
 
-def _parse_domain_line(line):
+def _parse_domain_line(line: str) -> Optional[str]:
     """Parse a single line, handling comments and whitespace."""
     # Strip inline comments (e.g., "example.com # bad site" -> "example.com")
     line = line.split("#")[0].strip()
@@ -344,7 +344,13 @@ def _parse_domain_line(line):
 
 
 # Shared command handlers for denylist/allowlist
-def _handle_list_command(ctx, profile, list_type, active_only, inactive_only):
+def _handle_list_command(
+    ctx: click.Context,
+    profile: str,
+    list_type: str,
+    active_only: bool,
+    inactive_only: bool,
+) -> None:
     """Shared handler for list commands."""
     try:
         profile_id = _resolve_profile_id(ctx, profile)
@@ -379,7 +385,13 @@ def _handle_list_command(ctx, profile, list_type, active_only, inactive_only):
         raise click.Abort()
 
 
-def _handle_add_command(ctx, profile, list_type, domains, inactive):
+def _handle_add_command(
+    ctx: click.Context,
+    profile: str,
+    list_type: str,
+    domains: Tuple[str, ...],
+    inactive: bool,
+) -> None:
     """Shared handler for add commands."""
     if not domains:
         click.echo("No domains provided.", err=True)
@@ -405,7 +417,12 @@ def _handle_add_command(ctx, profile, list_type, domains, inactive):
         ctx.exit(1)
 
 
-def _handle_remove_command(ctx, profile, list_type, domains):
+def _handle_remove_command(
+    ctx: click.Context,
+    profile: str,
+    list_type: str,
+    domains: Tuple[str, ...],
+) -> None:
     """Shared handler for remove commands."""
     if not domains:
         click.echo("No domains provided.", err=True)
@@ -430,7 +447,13 @@ def _handle_remove_command(ctx, profile, list_type, domains):
         ctx.exit(1)
 
 
-def _handle_import_command(ctx, profile, list_type, source, inactive):
+def _handle_import_command(
+    ctx: click.Context,
+    profile: str,
+    list_type: str,
+    source: str,
+    inactive: bool,
+) -> None:
     """Shared handler for import commands."""
     profile_id = _resolve_profile_id(ctx, profile)
 
@@ -468,7 +491,14 @@ def _handle_import_command(ctx, profile, list_type, source, inactive):
         ctx.exit(1)
 
 
-def _handle_export_command(ctx, profile, list_type, output, active_only, inactive_only):
+def _handle_export_command(
+    ctx: click.Context,
+    profile: str,
+    list_type: str,
+    output: str,
+    active_only: bool,
+    inactive_only: bool,
+) -> None:
     """Shared handler for export commands."""
     try:
         profile_id = _resolve_profile_id(ctx, profile)
@@ -507,7 +537,12 @@ def _handle_export_command(ctx, profile, list_type, output, active_only, inactiv
         raise click.Abort()
 
 
-def _handle_clear_command(ctx, profile, list_type, yes):
+def _handle_clear_command(
+    ctx: click.Context,
+    profile: str,
+    list_type: str,
+    yes: bool,
+) -> None:
     """Shared handler for clear commands."""
     try:
         profile_id = _resolve_profile_id(ctx, profile)
@@ -672,7 +707,9 @@ def allowlist_import(ctx, profile, source, inactive):
 @click.pass_context
 def allowlist_export(ctx, profile, output, active_only, inactive_only):
     """Export allowlist domains to a file (or stdout with -)."""
-    _handle_export_command(ctx, profile, "allowlist", output, active_only, inactive_only)
+    _handle_export_command(
+        ctx, profile, "allowlist", output, active_only, inactive_only
+    )
 
 
 @allowlist.command("clear")
