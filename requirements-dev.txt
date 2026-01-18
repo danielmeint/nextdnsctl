@@ -1,0 +1,13 @@
+# Development and testing dependencies
+-r requirements.txt
+
+# Testing
+pytest>=8.0
+pytest-mock>=3.12
+requests-mock>=1.11
+
+# Linting (already in CI, but good to have locally)
+flake8>=7.0
+
+# Type checking (recommended in test strategy)
+mypy>=1.0
