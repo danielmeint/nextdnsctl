@@ -7,7 +7,9 @@ A community-driven CLI tool for managing NextDNS profiles declaratively.
 
 **Disclaimer**: This is an unofficial tool, not affiliated with NextDNS. Built by a user, for users.
 
-> **Note**: While `nextdnsctl` handles API rate limiting and retries, it is **not recommended for importing very large blocklists**. For large-scale filtering, prefer using NextDNS's built-in curated blocklists under the **Privacy** tab, and use the `denylist` feature for specific overrides or fine-tuning.
+> **Note**: While `nextdnsctl` handles API rate limiting and retries, it is **not recommended for importing very large
+blocklists**. For large-scale filtering, prefer using NextDNS's built-in curated blocklists under the **Privacy** tab,
+> and use the `denylist` feature for specific overrides or fine-tuning.
 
 ## Features
 
@@ -43,15 +45,31 @@ nextdnsctl denylist add "My Profile" bad.com evil.com
 nextdnsctl --dry-run denylist import myprofile blocklist.txt
 ```
 
+## Authentication
+
+The API key can be provided in two ways (in order of priority):
+
+1. **Environment variable** (recommended for CI/CD):
+   ```bash
+   export NEXTDNS_API_KEY=your-api-key
+   nextdnsctl profile-list
+   ```
+
+2. **Config file** (created by `auth` command):
+   ```bash
+   nextdnsctl auth <your-api-key>
+   # Stored in ~/.nextdnsctl/config.json with secure permissions
+   ```
+
 ## Global Options
 
-| Option | Description |
-|--------|-------------|
-| `--concurrency N` | Number of parallel API requests (1-20, default: 5) |
-| `--dry-run` | Show what would be done without making changes |
-| `--retry-attempts N` | Number of retry attempts for API calls (default: 4) |
-| `--retry-delay N` | Initial delay between retries in seconds (default: 1) |
-| `--timeout N` | Request timeout in seconds (default: 10) |
+| Option               | Description                                           |
+|----------------------|-------------------------------------------------------|
+| `--concurrency N`    | Number of parallel API requests (1-20, default: 5)    |
+| `--dry-run`          | Show what would be done without making changes        |
+| `--retry-attempts N` | Number of retry attempts for API calls (default: 4)   |
+| `--retry-delay N`    | Initial delay between retries in seconds (default: 1) |
+| `--timeout N`        | Request timeout in seconds (default: 10)              |
 
 ## Profile Identification
 
@@ -68,6 +86,7 @@ nextdnsctl denylist list "My Profile"
 ## Denylist Commands
 
 ### List entries
+
 ```bash
 nextdnsctl denylist list <profile>
 nextdnsctl denylist list <profile> --active-only
@@ -75,24 +94,34 @@ nextdnsctl denylist list <profile> --inactive-only
 ```
 
 ### Add domains
+
 ```bash
 nextdnsctl denylist add <profile> domain1.com domain2.com
 nextdnsctl denylist add <profile> domain.com --inactive
 ```
 
 ### Remove domains
+
 ```bash
 nextdnsctl denylist remove <profile> domain1.com domain2.com
 ```
 
 ### Import from file or URL
+
 ```bash
 nextdnsctl denylist import <profile> /path/to/blocklist.txt
 nextdnsctl denylist import <profile> https://example.com/blocklist.txt
 nextdnsctl denylist import <profile> blocklist.txt --inactive
 ```
 
+The import file format supports:
+- One domain per line
+- Comments starting with `#`
+- Inline comments (e.g., `example.com # reason`)
+- Empty lines (ignored)
+
 ### Export to file
+
 ```bash
 nextdnsctl denylist export <profile> backup.txt
 nextdnsctl denylist export <profile>  # outputs to stdout
@@ -100,6 +129,7 @@ nextdnsctl denylist export <profile> --active-only > active.txt
 ```
 
 ### Clear all entries
+
 ```bash
 nextdnsctl denylist clear <profile>       # asks for confirmation
 nextdnsctl denylist clear <profile> --yes # skip confirmation

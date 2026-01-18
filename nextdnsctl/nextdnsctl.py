@@ -310,17 +310,37 @@ def profile_list(ctx):
         raise click.Abort()
 
 
-def read_source(source):
-    """Read content from a file or URL."""
+def read_domains_from_source(source):
+    """
+    Read domains from a file or URL, yielding one domain per line.
+
+    Handles:
+    - Comment lines (starting with #)
+    - Inline comments (e.g., "example.com # bad site")
+    - Empty lines and whitespace
+    - Streaming for memory efficiency with large files
+    """
     if source.startswith("http://") or source.startswith("https://"):
-        response = requests.get(
-            source, timeout=DEFAULT_TIMEOUT
-        )  # Using global default timeout
+        response = requests.get(source, stream=True, timeout=DEFAULT_TIMEOUT)
         response.raise_for_status()
-        return response.text
+        for line in response.iter_lines(decode_unicode=True):
+            if line:
+                domain = _parse_domain_line(line)
+                if domain:
+                    yield domain
     else:
         with open(source, "r") as f:
-            return f.read()
+            for line in f:
+                domain = _parse_domain_line(line)
+                if domain:
+                    yield domain
+
+
+def _parse_domain_line(line):
+    """Parse a single line, handling comments and whitespace."""
+    # Strip inline comments (e.g., "example.com # bad site" -> "example.com")
+    line = line.split("#")[0].strip()
+    return line if line else None
 
 
 # Shared command handlers for denylist/allowlist
@@ -415,16 +435,13 @@ def _handle_import_command(ctx, profile, list_type, source, inactive):
     profile_id = _resolve_profile_id(ctx, profile)
 
     try:
-        content = read_source(source)
+        # Use generator to stream file/URL and collect domains
+        # This avoids loading raw file content into memory
+        domains_to_import = list(read_domains_from_source(source))
     except Exception as e:
         click.echo(f"Error reading source: {e}", err=True)
         raise click.Abort()
 
-    domains_to_import = [
-        line.strip()
-        for line in content.splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    ]
     if not domains_to_import:
         click.echo("No domains found in source.", err=True)
         return
