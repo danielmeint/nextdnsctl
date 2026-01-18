@@ -8,7 +8,7 @@ API_BASE = "https://api.nextdns.io"
 DEFAULT_RETRIES = 4
 DEFAULT_DELAY = 1  # For general errors or Retry-After scenarios
 DEFAULT_TIMEOUT = 10
-USER_AGENT = "nextdnsctl/0.2.0"
+USER_AGENT = "nextdnsctl/0.3.0"
 DEFAULT_PATIENT_RETRY_PAUSE_SECONDS = 60  # Added: Pause for unspecific 429s
 
 
@@ -123,37 +123,51 @@ def get_profiles(**kwargs):
     return api_call("GET", "/profiles", **kwargs)["data"]
 
 
+# Generic domain list functions
+def get_domain_list(profile_id, list_type, **kwargs):
+    """Retrieve the current list (denylist/allowlist) for a profile."""
+    return api_call("GET", f"/profiles/{profile_id}/{list_type}", **kwargs)["data"]
+
+
+def add_to_domain_list(profile_id, list_type, domain, active=True, **kwargs):
+    """Add a domain to a list (denylist/allowlist)."""
+    data = {"id": domain, "active": active}
+    api_call("POST", f"/profiles/{profile_id}/{list_type}", data=data, **kwargs)
+    return f"Added {domain} as {'active' if active else 'inactive'}"
+
+
+def remove_from_domain_list(profile_id, list_type, domain, **kwargs):
+    """Remove a domain from a list (denylist/allowlist)."""
+    api_call("DELETE", f"/profiles/{profile_id}/{list_type}/{domain}", **kwargs)
+    return f"Removed {domain}"
+
+
+# Convenience wrappers for backwards compatibility
 def get_denylist(profile_id, **kwargs):
     """Retrieve the current denylist for a profile."""
-    return api_call("GET", f"/profiles/{profile_id}/denylist", **kwargs)["data"]
+    return get_domain_list(profile_id, "denylist", **kwargs)
 
 
 def add_to_denylist(profile_id, domain, active=True, **kwargs):
     """Add a domain to the denylist."""
-    data = {"id": domain, "active": active}
-    api_call("POST", f"/profiles/{profile_id}/denylist", data=data, **kwargs)
-    return f"Added {domain} as {'active' if active else 'inactive'}"
+    return add_to_domain_list(profile_id, "denylist", domain, active, **kwargs)
 
 
 def remove_from_denylist(profile_id, domain, **kwargs):
     """Remove a domain from the denylist."""
-    api_call("DELETE", f"/profiles/{profile_id}/denylist/{domain}", **kwargs)
-    return f"Removed {domain}"
+    return remove_from_domain_list(profile_id, "denylist", domain, **kwargs)
 
 
 def get_allowlist(profile_id, **kwargs):
     """Retrieve the current allowlist for a profile."""
-    return api_call("GET", f"/profiles/{profile_id}/allowlist", **kwargs)["data"]
+    return get_domain_list(profile_id, "allowlist", **kwargs)
 
 
 def add_to_allowlist(profile_id, domain, active=True, **kwargs):
     """Add a domain to the allowlist."""
-    data = {"id": domain, "active": active}
-    api_call("POST", f"/profiles/{profile_id}/allowlist", data=data, **kwargs)
-    return f"Added {domain} as {'active' if active else 'inactive'}"
+    return add_to_domain_list(profile_id, "allowlist", domain, active, **kwargs)
 
 
 def remove_from_allowlist(profile_id, domain, **kwargs):
     """Remove a domain from the allowlist."""
-    api_call("DELETE", f"/profiles/{profile_id}/allowlist/{domain}", **kwargs)
-    return f"Removed {domain}"
+    return remove_from_domain_list(profile_id, "allowlist", domain, **kwargs)
