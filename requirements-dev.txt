@@ -11,3 +11,4 @@ flake8>=7.0
 
 # Type checking (recommended in test strategy)
 mypy>=1.0
+types-requests>=2.31

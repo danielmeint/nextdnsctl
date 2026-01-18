@@ -125,7 +125,10 @@ def api_call(
 
 def get_profiles(**kwargs: Any) -> List[Dict[str, Any]]:
     """Retrieve all NextDNS profiles."""
-    return api_call("GET", "profiles", **kwargs)["data"]
+    response = api_call("GET", "profiles", **kwargs)
+    if response is None:
+        raise Exception("Unexpected empty response from profiles endpoint")
+    return response["data"]
 
 
 # Generic domain list functions
@@ -133,7 +136,10 @@ def get_domain_list(
     profile_id: str, list_type: str, **kwargs: Any
 ) -> List[Dict[str, Any]]:
     """Retrieve the current list (denylist/allowlist) for a profile."""
-    return api_call("GET", f"profiles/{profile_id}/{list_type}", **kwargs)["data"]
+    response = api_call("GET", f"profiles/{profile_id}/{list_type}", **kwargs)
+    if response is None:
+        raise Exception(f"Unexpected empty response from {list_type} endpoint")
+    return response["data"]
 
 
 def add_to_domain_list(

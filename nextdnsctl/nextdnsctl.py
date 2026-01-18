@@ -1,6 +1,6 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Callable, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Iterator, List, Optional, Sequence, Tuple  # noqa: F401
 
 import click
 import requests
@@ -64,7 +64,7 @@ def _resolve_profile_id(ctx: click.Context, profile_identifier: str) -> str:
 # Helper function to perform operations on a list of domains
 def _perform_domain_operations(
     ctx: click.Context,
-    domains_to_process: List[str],
+    domains_to_process: Sequence[str],
     operation_callable: Callable[[str], str],
     item_name_singular: str = "domain",
     action_verb: str = "process",
@@ -104,7 +104,7 @@ def _perform_domain_operations(
 
 
 def _perform_domain_operations_dry_run(
-    domains_to_process: List[str],
+    domains_to_process: Sequence[str],
     item_name_singular: str,
     action_verb: str,
 ) -> bool:
@@ -120,7 +120,7 @@ def _perform_domain_operations_dry_run(
 
 def _perform_domain_operations_sequential(
     ctx: click.Context,
-    domains_to_process: List[str],
+    domains_to_process: Sequence[str],
     operation_callable: Callable[[str], str],
     item_name_singular: str,
     action_verb: str,
@@ -159,7 +159,7 @@ def _perform_domain_operations_sequential(
 
 def _perform_domain_operations_parallel(
     ctx: click.Context,
-    domains_to_process: List[str],
+    domains_to_process: Sequence[str],
     operation_callable: Callable[[str], str],
     item_name_singular: str,
     action_verb: str,
@@ -183,11 +183,12 @@ def _perform_domain_operations_parallel(
 
         submitted_count = len(futures)
 
-        with click.progressbar(
+        progress_bar: Any = click.progressbar(
             length=submitted_count,
             label=f"Processing {item_name_singular}s",
             show_pos=True,
-        ) as bar:
+        )
+        with progress_bar as bar:
             for future in as_completed(futures):
                 domain = futures[future]
                 try:
@@ -556,7 +557,7 @@ def _handle_clear_command(
             click.echo(f"{list_type.capitalize()} is already empty.")
             return
 
-        domains = [entry.get("id") for entry in entries if entry.get("id")]
+        domains: List[str] = [entry["id"] for entry in entries if entry.get("id")]
         if not domains:
             click.echo(f"{list_type.capitalize()} is already empty.")
             return
