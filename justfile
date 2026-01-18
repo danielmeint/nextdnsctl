@@ -41,9 +41,23 @@ build:
     rm -rf dist/
     .venv/bin/python -m build
 
-# Upload to PyPI (requires TWINE_USERNAME and TWINE_PASSWORD)
+# Upload to PyPI (uses ~/.pypirc for credentials)
 publish: build
     .venv/bin/python -m twine upload dist/*
+
+# Create a new release (bump version, tag, and push)
+# Usage: just release 1.2.0
+release version:
+    @echo "Updating version to {{version}}..."
+    sed -i '' 's/__version__ = ".*"/__version__ = "{{version}}"/' nextdnsctl/__init__.py
+    git add nextdnsctl/__init__.py
+    git commit -m "Bump version to {{version}}"
+    git tag -a "v{{version}}" -m "Release v{{version}}"
+    git push origin main
+    git push origin "v{{version}}"
+    @echo "Release v{{version}} tagged and pushed!"
+    @echo "GitHub Actions will publish to PyPI automatically."
+    @echo "Or run 'just publish' to publish manually."
 
 # Clean build artifacts
 clean:
