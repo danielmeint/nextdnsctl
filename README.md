@@ -1,7 +1,7 @@
 # nextdnsctl
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Build Status](https://github.com/danielmeint/nextdnsctl/actions/workflows/lint.yml/badge.svg)](https://github.com/danielmeint/nextdnsctl/actions/workflows/lint.yml)
+[![Build Status](https://github.com/danielmeint/nextdnsctl/actions/workflows/test.yml/badge.svg)](https://github.com/danielmeint/nextdnsctl/actions/workflows/test.yml)
 
 A community-driven CLI tool for managing NextDNS profiles declaratively.
 
