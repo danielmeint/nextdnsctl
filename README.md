@@ -27,7 +27,7 @@ blocklists**. For large-scale filtering, prefer using NextDNS's built-in curated
 pip install nextdnsctl
 ```
 
-Requires Python 3.6+.
+Requires Python 3.10+.
 
 ## Quick Start
 
