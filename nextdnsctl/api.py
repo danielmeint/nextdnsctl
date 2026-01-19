@@ -36,8 +36,13 @@ def validate_domain(domain: str) -> str:
     """
     Validate a domain name format.
 
+    Accepts full URLs and extracts the domain portion. Handles:
+    - Protocol prefixes (http://, https://, ftp://, etc.)
+    - Paths after the domain (/path/to/something)
+    - Port numbers (example.com:8080)
+
     Args:
-        domain: The domain name to validate
+        domain: The domain name or URL to validate
 
     Returns:
         The validated domain (lowercase, stripped)
@@ -46,6 +51,21 @@ def validate_domain(domain: str) -> str:
         InvalidDomainError: If the domain format is invalid
     """
     domain = domain.strip().lower()
+    if not domain:
+        raise InvalidDomainError("Domain cannot be empty")
+
+    # Strip protocol prefix (e.g., https://, http://, ftp://)
+    if "://" in domain:
+        domain = domain.split("://", 1)[1]
+
+    # Strip path (everything after first /)
+    if "/" in domain:
+        domain = domain.split("/", 1)[0]
+
+    # Strip port number (e.g., :8080)
+    if ":" in domain:
+        domain = domain.split(":", 1)[0]
+
     if not domain:
         raise InvalidDomainError("Domain cannot be empty")
     if len(domain) > 253:

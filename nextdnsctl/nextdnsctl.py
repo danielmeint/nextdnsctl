@@ -457,6 +457,9 @@ def _handle_add_command(
     if not success:
         ctx.exit(1)
 
+    if not ctx.obj.get("dry_run", False):
+        click.echo(f"\nView at: https://my.nextdns.io/{profile_id}/{list_type}")
+
 
 def _handle_remove_command(
     ctx: click.Context,
@@ -537,6 +540,9 @@ def _handle_import_command(
     )
     if not success:
         ctx.exit(1)
+
+    if not ctx.obj.get("dry_run", False):
+        click.echo(f"\nView at: https://my.nextdns.io/{profile_id}/{list_type}")
 
 
 def _handle_export_command(

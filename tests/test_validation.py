@@ -112,3 +112,42 @@ class TestDomainValidation:
         """Should accept hyphens in the middle of labels."""
         assert validate_domain("my-example.com") == "my-example.com"
         assert validate_domain("test-domain-name.co.uk") == "test-domain-name.co.uk"
+
+    def test_strips_http_protocol(self):
+        """Should strip http:// protocol prefix."""
+        assert validate_domain("http://example.com") == "example.com"
+        assert validate_domain("http://sub.example.com") == "sub.example.com"
+
+    def test_strips_https_protocol(self):
+        """Should strip https:// protocol prefix."""
+        assert validate_domain("https://example.com") == "example.com"
+        assert validate_domain("https://sub.example.com") == "sub.example.com"
+
+    def test_strips_other_protocols(self):
+        """Should strip other protocol prefixes."""
+        assert validate_domain("ftp://example.com") == "example.com"
+        assert validate_domain("sftp://example.com") == "example.com"
+
+    def test_strips_path(self):
+        """Should strip path from URL."""
+        assert validate_domain("example.com/path/to/page") == "example.com"
+        assert validate_domain("https://example.com/path") == "example.com"
+        assert validate_domain("http://example.com/") == "example.com"
+
+    def test_strips_port(self):
+        """Should strip port number from domain."""
+        assert validate_domain("example.com:8080") == "example.com"
+        assert validate_domain("https://example.com:443") == "example.com"
+        assert validate_domain("http://example.com:8080/path") == "example.com"
+
+    def test_strips_protocol_path_and_port(self):
+        """Should handle full URLs with protocol, port, and path."""
+        assert validate_domain("https://example.com:443/path/to/page") == "example.com"
+        assert validate_domain("http://sub.example.com:8080/api/v1") == "sub.example.com"
+
+    def test_rejects_protocol_only(self):
+        """Should reject URLs that are just protocols."""
+        with pytest.raises(InvalidDomainError, match="cannot be empty"):
+            validate_domain("http://")
+        with pytest.raises(InvalidDomainError, match="cannot be empty"):
+            validate_domain("https://")
