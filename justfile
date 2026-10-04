@@ -45,6 +45,10 @@ build:
 publish: build
     .venv/bin/python -m twine upload dist/*
 
+# Print the Homebrew formula for a released version (CI pushes it to the tap automatically)
+formula version:
+    python3 scripts/homebrew_formula.py {{version}}
+
 # Create a new release (bump version, tag, push, and publish GitHub release)
 # Requires GitHub CLI authentication. Publishing the GitHub release triggers PyPI.
 # Usage: just release 1.2.0

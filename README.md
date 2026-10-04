@@ -29,10 +29,19 @@ nextdnsctl apply         # make NextDNS match the file
 ## Installation
 
 ```bash
-pip install nextdnsctl      # or: pipx install nextdnsctl / uv tool install nextdnsctl
+# Homebrew (macOS, Linux)
+brew tap danielmeint/tap
+brew trust danielmeint/tap       # recent Homebrew asks you to trust third-party taps
+brew install nextdnsctl
+
+# PyPI (Python 3.10+)
+pipx install nextdnsctl          # or: uv tool install nextdnsctl / pip install nextdnsctl
+
+# Nix
+nix run github:danielmeint/nextdnsctl -- --help
 ```
 
-Requires Python 3.10+. Upgrading from 1.x? See [migrating to 2.0](docs/migrating-to-2.md).
+Upgrading from 1.x? See [migrating to 2.0](docs/migrating-to-2.md).
 
 ## Authentication
 

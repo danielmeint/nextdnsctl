@@ -1,0 +1,81 @@
+name: Update Homebrew formula
+
+# Regenerates Formula/nextdnsctl.rb in danielmeint/homebrew-tap from the release on
+# PyPI, builds and tests it, then pushes it. Runs after "Publish to PyPI" succeeds,
+# or by hand for a given version.
+
+on:
+  workflow_run:
+    workflows: ["Publish to PyPI"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version on PyPI (e.g. 2.0.0)"
+        required: true
+
+jobs:
+  formula:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: macos-14
+    env:
+      TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_FROM_API: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve version
+        id: ver
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          RUN_TAG: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          VERSION="${INPUT_VERSION:-${RUN_TAG#v}}"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release version: '$VERSION'"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Generate formula
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: python scripts/homebrew_formula.py "$VERSION" > nextdnsctl.rb && cat nextdnsctl.rb
+
+      - name: Build, test and audit
+        run: |
+          set -euo pipefail
+          brew tap-new --no-git local/check
+          cp nextdnsctl.rb "$(brew --repository)/Library/Taps/local/homebrew-check/Formula/"
+          brew trust local/check 2>/dev/null || true
+          brew install --build-from-source local/check/nextdnsctl
+          brew test local/check/nextdnsctl
+          brew audit --strict --online local/check/nextdnsctl
+
+      # Push via a write-enabled deploy key on danielmeint/homebrew-tap (TAP_DEPLOY_KEY secret).
+      - name: Push to the tap
+        if: env.TAP_DEPLOY_KEY != ''
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          KEY="$RUNNER_TEMP/tap_deploy_key"
+          printf '%s\n' "$TAP_DEPLOY_KEY" > "$KEY"
+          chmod 600 "$KEY"
+          export GIT_SSH_COMMAND="ssh -i $KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone "git@github.com:danielmeint/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp nextdnsctl.rb tap/Formula/nextdnsctl.rb
+          cd tap
+          if git diff --quiet -- Formula/nextdnsctl.rb && ! git ls-files --others --exclude-standard | grep -q .; then
+            echo "Formula already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/nextdnsctl.rb
+          git commit -m "nextdnsctl $VERSION"
+          git push

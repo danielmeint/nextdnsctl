@@ -54,3 +54,7 @@ dmypy.json
 
 # Personal
 .*.md
+
+# Nix
+result
+result-*

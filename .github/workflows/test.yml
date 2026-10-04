@@ -20,6 +20,15 @@ jobs:
       - name: Run tests
         run: pytest tests/ -v
 
+  nix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Build the flake (runs the test suite)
+        run: nix build .#nextdnsctl -L
+      - run: ./result/bin/nextdnsctl --version
+
   lint:
     runs-on: ubuntu-latest
     steps:

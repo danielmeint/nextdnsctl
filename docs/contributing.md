@@ -17,6 +17,10 @@ Thanks for your interest in contributing!
 - Checks: `just check` (lint, types, tests). Tests run against an in-memory fake of the
   NextDNS API (`tests/fake_api.py`) that reproduces its observed behaviour; if you find
   the real API behaving differently, update the fake and `docs/v2-design.md` together.
+- Releases: `just release X.Y.Z` tags and publishes a GitHub release; GitHub Actions then
+  publishes to PyPI and regenerates, tests and pushes the Homebrew formula
+  (`.github/workflows/homebrew.yml`; run it by hand from the Actions tab if needed).
+  `flake.nix` reads the version from `nextdnsctl/__init__.py`.
 - Live round trip: `NEXTDNS_API_KEY=… just test-live` creates and deletes a temporary profile.
 
 ## Ideas
