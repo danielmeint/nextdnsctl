@@ -26,7 +26,7 @@ TEMPLATE = """\
 class Nextdnsctl < Formula
   include Language::Python::Virtualenv
 
-  desc "Command-line tool to manage NextDNS profiles declaratively"
+  desc "Bulk-edit, import and back up NextDNS denylists and allowlists"
   homepage "https://github.com/danielmeint/nextdnsctl"
   url "{url}"
   sha256 "{sha256}"

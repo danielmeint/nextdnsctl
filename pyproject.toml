@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "nextdnsctl"
 dynamic = ["version"]
-description = "Manage NextDNS profiles declaratively from the command line"
+description = "Bulk-edit, import and back up NextDNS denylists and allowlists from the command line"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

@@ -1,5 +1,5 @@
 {
-  description = "Manage NextDNS profiles declaratively from the command line";
+  description = "Bulk-edit, import and back up NextDNS denylists and allowlists from the command line";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
@@ -49,7 +49,7 @@
           ];
           pythonImportsCheck = [ "nextdnsctl" ];
           meta = {
-            description = "Manage NextDNS profiles declaratively from the command line";
+            description = "Bulk-edit, import and back up NextDNS denylists and allowlists from the command line";
             homepage = "https://github.com/danielmeint/nextdnsctl";
             license = lib.licenses.mit;
             mainProgram = "nextdnsctl";

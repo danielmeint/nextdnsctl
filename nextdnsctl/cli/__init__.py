@@ -103,12 +103,16 @@ def _deprecated_noop(ctx: click.Context, param: click.Parameter, value: Any) -> 
 @click.option("--retry-delay", type=float, hidden=True, callback=_deprecated_noop, expose_value=False)
 @click.pass_context
 def cli(ctx: click.Context, profile, file, json_output, verbose, quiet, timeout, dry_run) -> None:
-    """Manage NextDNS profiles from the command line, or declaratively from a file.
+    """Bulk-edit, import and back up NextDNS denylists and allowlists.
 
     \b
-    Declarative:   pull → edit nextdns.yaml → plan → apply
-    Quick edits:   denylist / allowlist / rewrites
-    Observability: logs, why
+    Start:           nextdnsctl auth login
+    Lists:           denylist / allowlist  (list, add, remove, import, export, clear)
+    Diagnose:        why, logs
+    Other edits:     rewrites, profile
+    Whole profiles:  pull → edit nextdns.yaml → plan → apply
+
+    Choose the profile with -p NAME or the NEXTDNS_PROFILE environment variable.
     """
     level = logging.ERROR if quiet else logging.DEBUG if verbose else logging.WARNING
     _configure_logging(level)
