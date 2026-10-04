@@ -213,9 +213,7 @@ class Client:
                     )
                 delay = RATE_LIMIT_BACKOFF[rate_limited]
                 rate_limited += 1
-                log.log(
-                    logging.WARNING if delay >= 8 else logging.INFO, "Rate limited by NextDNS; retrying in %gs", delay
-                )
+                log.log(logging.WARNING if delay >= 8 else logging.INFO, "NextDNS rate limit, retrying in %gs", delay)
                 pacer.hold(delay)
                 continue
             if status >= 500 and attempt < self.retries:

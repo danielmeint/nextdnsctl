@@ -285,3 +285,19 @@ def test_removing_several_rewrites_asks_first(runner, fake, home):
     assert result.exit_code == 2 and len(home["rewrites"]) == 2
     assert run(runner, "-p", "home", "rewrites", "remove", "nas.lan", "--yes").exit_code == 0
     assert home["rewrites"] == []
+
+
+@pytest.mark.usefixtures("keyed")
+def test_quick_edits_never_fetch_the_whole_profile(runner, fake, home):
+    run(runner, "-p", "home", "denylist", "add", "a.com")
+    run(runner, "-p", "home", "rewrites", "add", "nas.lan", "10.0.0.1")
+    full_profile_reads = [r for r in fake.requests if r[0] == "GET" and r[1] == "profiles/abc123"]
+    assert full_profile_reads == []  # only /denylist and /rewrites, which NextDNS throttles less
+
+
+def test_rejected_key_message(runner, monkeypatch):
+    monkeypatch.setenv("NEXTDNS_API_KEY", "wrong")
+    result = runner.invoke(cli, ["profile", "list"])
+    assert result.exit_code == 1
+    assert "NextDNS rejected the API key (from NEXTDNS_API_KEY)" in result.output
+    assert "auth login" in result.output

@@ -8,8 +8,8 @@ from typing import Any, Optional
 import click
 
 from .. import __version__
-from ..auth import PROFILE_ENV_VAR, NoAPIKeyError, load_api_key
-from ..client import DEFAULT_TIMEOUT, Client, NextDNSError
+from ..auth import PROFILE_ENV_VAR, NoAPIKeyError, find_api_key, load_api_key
+from ..client import DEFAULT_TIMEOUT, APIError, Client, NextDNSError
 from ..config import DEFAULT_FILE, ConfigError
 from ..planner import Planner, PlanError
 from ..pull import DuplicateNameError
@@ -21,6 +21,12 @@ EXIT_CHANGES = 2  # plan: there are changes
 EXIT_PARTIAL = 3  # apply: some but not all changes were applied
 
 EXPECTED_ERRORS = (ConfigError, PlanError, NextDNSError, NoAPIKeyError, SourceError, DuplicateNameError)
+
+
+class ConfirmationRequired(click.ClickException):
+    """Asking for confirmation isn't possible (no terminal); exit 2 like a usage error, without the usage text."""
+
+    exit_code = 2
 
 
 def make_client(api_key: str, timeout: float = DEFAULT_TIMEOUT) -> Client:
@@ -69,6 +75,15 @@ class RootGroup(click.Group):
     def invoke(self, ctx: click.Context) -> Any:
         try:
             return super().invoke(ctx)
+        except APIError as e:
+            if e.status in (401, 403) and e.path == "profiles":
+                source = find_api_key()
+                where = f" (from {source.origin})" if source else ""
+                raise click.ClickException(
+                    f"NextDNS rejected the API key{where}. Set a new one with 'nextdnsctl auth login'; "
+                    "you'll find it at https://my.nextdns.io/account."
+                ) from e
+            raise click.ClickException(str(e)) from e
         except EXPECTED_ERRORS as e:
             raise click.ClickException(str(e)) from e
 

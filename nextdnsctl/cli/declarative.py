@@ -12,9 +12,12 @@ from .. import config as config_mod
 from .. import pull as pull_mod
 from ..executor import ApplyResult, Executor
 from ..planner import Op, ProfilePlan
-from . import EXIT_CHANGES, EXIT_ERROR, EXIT_PARTIAL, State, cli, pass_state
+from . import EXIT_CHANGES, EXIT_ERROR, EXIT_PARTIAL, ConfirmationRequired, State, cli, pass_state
 from .output import emit_json, info, plan_to_json, render_plan, render_result, result_to_json, warn
 from .status import status, working
+
+
+PROGRESS_BAR_MIN_OPS = 10
 
 
 @cli.command()
@@ -129,7 +132,7 @@ def confirm(plans: list[ProfilePlan], yes: bool) -> None:
     if yes:
         return
     if not sys.stdin.isatty():
-        raise click.UsageError("Not asking for confirmation without a terminal; pass --yes to apply.")
+        raise ConfirmationRequired("Not asking for confirmation without a terminal; pass --yes to apply.")
     removals = sum(p.removals for p in plans)
     created = sum(1 for p in plans if p.create)
     notes = []
@@ -160,7 +163,7 @@ def run_plans(state: State, plans: list[ProfilePlan]) -> list[ApplyResult]:
 
 
 def _apply_one(state: State, executor: Executor, plan: ProfilePlan) -> ApplyResult:
-    if not plan.ops or state.json or not sys.stderr.isatty():
+    if len(plan.ops) < PROGRESS_BAR_MIN_OPS or state.json or not sys.stderr.isatty():
         with working(f"Applying changes to {plan.key}"):
             return executor.apply(plan)
     with (

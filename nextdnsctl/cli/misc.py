@@ -18,7 +18,7 @@ from ..config import normalize_rewrite_content, normalize_rewrite_name
 from ..domains import InvalidDomainError, domain_from_argument
 from ..model import canonicalize
 from ..planner import Resolved
-from . import State, cli, pass_state
+from . import ConfirmationRequired, State, cli, pass_state
 from .declarative import confirm, run_plans
 from .lists import add_entries, change_list, report_skipped
 from .output import emit_json, info, render_plan, warn
@@ -127,7 +127,7 @@ def profile_delete(state: State, name_or_id: str, yes: bool) -> None:
         return
     if not yes:
         if not sys.stdin.isatty():
-            raise click.UsageError("Not asking for confirmation without a terminal; pass --yes.")
+            raise ConfirmationRequired("Not asking for confirmation without a terminal; pass --yes.")
         click.confirm(f"Delete profile {found['name']!r} ({found['id']})? This cannot be undone.", abort=True, err=True)
     state.client.delete_profile(found["id"])
     info(f"Deleted profile {found['name']!r} ({found['id']}).")
@@ -175,7 +175,7 @@ def rewrites() -> None:
 def _change_rewrites(state: State, build, yes: bool = True) -> None:
     planner = state.planner
     found = planner.require_profile(state.require_profile())
-    api_profile = planner.live(found["id"])
+    api_profile = planner.live_for(found, {"rewrites"})
     live = canonicalize(api_profile).get("rewrites") or []
     plan = planner.plan_against(found["name"], found["id"], Resolved(overlay={"rewrites": build(live)}), api_profile)
     if not plan.has_changes:

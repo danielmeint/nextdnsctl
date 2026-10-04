@@ -58,7 +58,7 @@ def change_list(
     """Plan `build(live entries)` as the new list and apply it, like a one-section apply."""
     planner = state.planner
     profile = planner.require_profile(profile_name)
-    api_profile = planner.live(profile["id"])
+    api_profile = planner.live_for(profile, {list_name})
     live_entries = canonicalize(api_profile).get(list_name) or []
     resolved = Resolved(overlay={list_name: build(live_entries)})
     plan = planner.plan_against(profile["name"], profile["id"], resolved, api_profile)

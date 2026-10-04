@@ -81,9 +81,8 @@ class Executor:
             return result
 
         if verify and not result.failures:
-            after = self.planner.plan_against(
-                plan.key, result.profile_id, plan.resolved, self.planner.live(result.profile_id)
-            )
+            current = self.planner.live_for({"id": result.profile_id, "name": plan.name}, plan.resolved.overlay)
+            after = self.planner.plan_against(plan.key, result.profile_id, plan.resolved, current)
             if after.diff:
                 result.drift = after.diff
         return result

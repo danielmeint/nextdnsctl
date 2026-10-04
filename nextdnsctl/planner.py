@@ -40,6 +40,7 @@ log = logging.getLogger(__name__)
 SAFE_BODY_BYTES = MAX_BODY_BYTES - 4 * 1024
 SOURCE_ERROR_PREVIEW = 20
 PREFETCH_WORKERS = 4
+LIST_ENDPOINTS = {"denylist", "allowlist", "rewrites"}
 
 
 def _fetching_message(profiles: list[dict[str, Any]], done: int) -> str:
@@ -170,6 +171,20 @@ class Planner:
         if profile_id in self._prefetched:
             return self._prefetched.pop(profile_id)
         return self.client.get_profile(profile_id)
+
+    def live_for(self, profile: dict[str, Any], sections: Any) -> dict[str, Any]:
+        """The parts of a profile needed to plan changes to `sections` (top-level keys).
+
+        Changes that only touch the denylist, allowlist or rewrites read those endpoints
+        instead of the whole profile, which NextDNS throttles much sooner (A11).
+        """
+        wanted = set(sections)
+        if wanted and wanted <= LIST_ENDPOINTS:
+            partial: dict[str, Any] = {"id": profile["id"], "name": profile.get("name", profile["id"])}
+            for section in sorted(wanted):
+                partial[section] = self.client.get_items(profile["id"], section)
+            return partial
+        return self.live(profile["id"])
 
     def prefetch(self, profiles: list[dict[str, Any]]) -> None:
         """Fetch several profiles in parallel. NextDNS sometimes takes many seconds per
