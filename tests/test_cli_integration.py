@@ -147,6 +147,54 @@ class TestProfileResolution:
             assert "bad-domain.com" in result.output
 
 
+class TestErrorHandling:
+    """Tests for clean error reporting."""
+
+    def test_ambiguous_profile_name(self, runner, mock_api_key):
+        """Two profiles with the same name should be an error, not a silent pick."""
+        profiles = {"data": [{"id": "aaa111", "name": "Home"}, {"id": "bbb222", "name": "home"}]}
+        with rm.Mocker() as m:
+            m.get(f"{API_BASE}profiles", json=profiles)
+            result = runner.invoke(cli, ["denylist", "list", "Home"])
+
+        assert result.exit_code != 0
+        assert "ambiguous" in result.output
+        assert "aaa111" in result.output and "bbb222" in result.output
+
+    def test_add_api_error_has_no_traceback(self, runner, mock_api_key, mock_profiles_response):
+        """An API error while fetching the list should be a clean CLI error."""
+        with rm.Mocker() as m:
+            m.get(f"{API_BASE}profiles", json=mock_profiles_response)
+            m.get(
+                f"{API_BASE}profiles/abc1234/denylist",
+                status_code=403,
+                json={"errors": [{"code": "forbidden"}]},
+            )
+            result = runner.invoke(cli, ["--retry-attempts", "0", "denylist", "add", "abc1234", "a.com"])
+
+        assert result.exit_code == 1
+        assert "Failed to fetch denylist" in result.output
+        assert isinstance(result.exception, SystemExit)
+
+    def test_clear_partial_failure_reports_cleanly(self, runner, mock_api_key, mock_profiles_response):
+        """A failed removal during clear should exit 1 without a bogus 'Error clearing' message."""
+        with rm.Mocker() as m:
+            m.get(f"{API_BASE}profiles", json=mock_profiles_response)
+            m.get(f"{API_BASE}profiles/abc1234/denylist", json={"data": [{"id": "a.com", "active": True}]})
+            m.delete(
+                f"{API_BASE}profiles/abc1234/denylist/a.com",
+                status_code=404,
+                json={"errors": [{"code": "notFound"}]},
+            )
+            result = runner.invoke(
+                cli, ["--retry-attempts", "0", "--concurrency", "1", "denylist", "clear", "abc1234", "--yes"]
+            )
+
+        assert result.exit_code == 1
+        assert "Error clearing" not in result.output
+        assert "Failed to remove" in result.output
+
+
 class TestAuthCommand:
     """Tests for auth command."""
 
@@ -170,11 +218,35 @@ class TestAuthCommand:
         assert config_file.exists()
 
     def test_auth_without_key_fails(self, runner):
-        """Auth command should fail when no key provided."""
-        result = runner.invoke(cli, ["auth"])
+        """Auth command should fail when no key is provided on stdin either."""
+        result = runner.invoke(cli, ["auth"], input="")
 
         assert result.exit_code != 0
-        assert "Missing argument" in result.output
+        assert "No API key provided" in result.output
+
+    def test_auth_reads_key_from_stdin(self, runner, tmp_path, monkeypatch):
+        """Auth without an argument should read the key from stdin and not warn."""
+        saved = []
+        monkeypatch.setattr("nextdnsctl.nextdnsctl.save_api_key", saved.append)
+        monkeypatch.setattr("nextdnsctl.nextdnsctl.load_api_key", lambda: "piped-key")
+
+        result = runner.invoke(cli, ["auth"], input="piped-key\n")
+
+        assert result.exit_code == 0
+        assert saved == ["piped-key"]
+        assert "shell history" not in result.output
+
+    def test_auth_argument_warns_about_shell_history(self, runner, monkeypatch):
+        """Passing the key as an argument still works but warns."""
+        saved = []
+        monkeypatch.setattr("nextdnsctl.nextdnsctl.save_api_key", saved.append)
+        monkeypatch.setattr("nextdnsctl.nextdnsctl.load_api_key", lambda: "arg-key")
+
+        result = runner.invoke(cli, ["auth", "arg-key"])
+
+        assert result.exit_code == 0
+        assert saved == ["arg-key"]
+        assert "shell history" in result.output
 
 
 class TestImportCommand:

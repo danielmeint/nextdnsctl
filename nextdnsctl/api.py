@@ -1,9 +1,13 @@
 import re
+import sys
 import threading
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
 
+import idna
 import requests
 from requests.exceptions import RequestException
 
@@ -16,9 +20,11 @@ DEFAULT_TIMEOUT = 10
 USER_AGENT = f"nextdnsctl/{__version__}"
 DEFAULT_PATIENT_RETRY_PAUSE_SECONDS = 60  # Pause for unspecific 429s
 
-# Domain validation regex - matches valid domain names
-# Allows letters, numbers, hyphens, and dots. Must have at least one dot.
-DOMAIN_REGEX = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.[A-Za-z0-9-]{1,63})*\.[A-Za-z]{2,}$")
+# Domain validation regex, aligned with what the NextDNS API accepts: lowercase labels of
+# letters, digits, hyphens and underscores (no leading/trailing hyphen), at least two labels,
+# and a TLD that is either letters or punycode (xn--...).
+_LABEL = r"(?!-)[a-z0-9_-]{1,63}(?<!-)"
+DOMAIN_REGEX = re.compile(rf"^{_LABEL}(\.{_LABEL})*\.(?:[a-z]{{2,63}}|xn--[a-z0-9-]{{1,59}})$")
 
 
 class RateLimitStillActiveError(Exception):
@@ -55,6 +61,28 @@ def _extract_api_error_detail(error_data: Any) -> str:
     return first_error.get("detail") or first_error.get("title") or first_error.get("code") or str(first_error)
 
 
+def _warn(message: str) -> None:
+    """Print a diagnostic to stderr so it never mixes with command output on stdout."""
+    print(message, file=sys.stderr)
+
+
+def _parse_retry_after(value: Optional[str]) -> Optional[float]:
+    """Parse a Retry-After header (delay in seconds or an HTTP date). None if absent/invalid."""
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        retry_at = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=timezone.utc)
+    return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+
+
 def validate_domain(domain: str) -> str:
     """
     Validate a domain name format.
@@ -63,6 +91,8 @@ def validate_domain(domain: str) -> str:
     - Protocol prefixes (http://, https://, ftp://, etc.)
     - Paths after the domain (/path/to/something)
     - Port numbers (example.com:8080)
+    - A single trailing dot (example.com. is the same name as example.com)
+    - Internationalized names, converted to punycode (münchen.de -> xn--mnchen-3ya.de)
 
     Args:
         domain: The domain name or URL to validate
@@ -89,8 +119,16 @@ def validate_domain(domain: str) -> str:
     if ":" in domain:
         domain = domain.split(":", 1)[0]
 
+    if domain.endswith(".") and not domain.endswith(".."):
+        domain = domain[:-1]
+
     if not domain:
         raise InvalidDomainError("Domain cannot be empty")
+    if not domain.isascii():
+        try:
+            domain = idna.encode(domain, uts46=True).decode("ascii")
+        except idna.IDNAError:
+            raise InvalidDomainError(f"Invalid domain format: {domain}")
     if len(domain) > 253:
         raise InvalidDomainError(f"Domain too long: {domain[:50]}...")
     if not DOMAIN_REGEX.match(domain):
@@ -131,6 +169,12 @@ class APIClient:
         self._sessions: List[requests.Session] = []
         self._sessions_lock = threading.Lock()
 
+        # When one thread hits a rate limit, the others hold off too instead of each
+        # sending requests into the same limit.
+        self._pause_lock = threading.Lock()
+        self._pause_until = 0.0
+        self._pause_owner: Optional[int] = None
+
         # Create a main-thread session for connection reuse and backwards compatibility.
         self.session = self._create_session()
         self._session_local.session = self.session
@@ -156,6 +200,23 @@ class APIClient:
             self._session_local.session = session
         return session
 
+    def _pause_all(self, seconds: float) -> None:
+        """Ask every thread using this client to wait until the rate limit has passed."""
+        with self._pause_lock:
+            until = time.time() + seconds
+            if until > self._pause_until:
+                self._pause_until = until
+                self._pause_owner = threading.get_ident()
+
+    def _wait_for_pause(self) -> None:
+        """Block while another thread's rate-limit pause is in effect."""
+        with self._pause_lock:
+            if self._pause_owner == threading.get_ident():
+                return  # the pausing thread sleeps on its own
+            remaining = self._pause_until - time.time()
+        if remaining > 0:
+            time.sleep(remaining)
+
     def call(
         self,
         method: str,
@@ -174,43 +235,36 @@ class APIClient:
 
         for attempt in range(retries + 1):
             try:
+                self._wait_for_pause()
                 response = self._get_session().request(method, url, json=data, timeout=timeout)
 
                 if response.status_code == 429:
-                    retry_after_header = response.headers.get("Retry-After")
+                    retry_after = _parse_retry_after(response.headers.get("Retry-After"))
                     if attempt < retries:
-                        if retry_after_header:
-                            sleep_time = int(retry_after_header)
-                            print(
-                                f"Rate limited by API (Retry-After: {sleep_time}s). "
+                        if retry_after is not None:
+                            sleep_time = retry_after
+                            _warn(
+                                f"Rate limited by API (Retry-After: {sleep_time:g}s). "
                                 f"Retrying attempt {attempt + 1}/{retries + 1}..."
                             )
                         else:
                             sleep_time = DEFAULT_PATIENT_RETRY_PAUSE_SECONDS
-                            print(
+                            _warn(
                                 f"Rate limit hit (no Retry-After). "
                                 f"Pausing for {sleep_time}s before attempt {attempt + 1}/{retries + 1}..."
                             )
+                        self._pause_all(sleep_time)
                         time.sleep(sleep_time)
                         continue
                     else:
-                        if not retry_after_header:
-                            raise RateLimitStillActiveError(
-                                "API rate limit still active after "
-                                f"{retries + 1} attempts"
-                                " and significant pauses."
-                            )
-                        else:
-                            raise Exception(
-                                "API rate limit exceeded after "
-                                f"{retries + 1} attempts (Retry-After was "
-                                f"{retry_after_header}s on last attempt)."
-                            )
+                        raise RateLimitStillActiveError(
+                            f"API rate limit still active after {retries + 1} attempts and significant pauses."
+                        )
 
                 if response.status_code not in (200, 201, 204):
                     if response.status_code >= 500 and attempt < retries:
                         current_delay = delay * (2**attempt)
-                        print(
+                        _warn(
                             f"Server error ({response.status_code}). Retrying in {current_delay}s "
                             f"(attempt {attempt + 1}/{retries + 1})..."
                         )
@@ -237,7 +291,7 @@ class APIClient:
             except RequestException as e:
                 if attempt < retries:
                     current_delay = delay * (2**attempt)
-                    print(
+                    _warn(
                         f"Network error ({e}). Retrying in {current_delay}s "
                         f"(attempt {attempt + 1}/{retries + 1})..."
                     )

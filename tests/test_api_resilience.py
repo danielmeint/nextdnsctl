@@ -1,9 +1,13 @@
 """Tests for API error handling and resilience."""
 
-import pytest
+import threading
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from unittest.mock import Mock, patch
 
-from nextdnsctl.api import APIClient, APIError, RateLimitStillActiveError
+import pytest
+
+from nextdnsctl.api import APIClient, APIError, RateLimitStillActiveError, _parse_retry_after
 
 
 class TestRetryOn500:
@@ -121,6 +125,91 @@ class TestRateLimiting:
             client = APIClient("fake-key", retries=2)
             with pytest.raises(RateLimitStillActiveError):
                 client.call("GET", "test")
+
+
+class TestRetryAfterParsing:
+    """Tests for Retry-After header parsing."""
+
+    def test_seconds(self):
+        assert _parse_retry_after("5") == 5.0
+
+    def test_http_date(self):
+        retry_at = datetime.now(timezone.utc) + timedelta(seconds=30)
+        parsed = _parse_retry_after(format_datetime(retry_at, usegmt=True))
+        assert parsed is not None and 25 <= parsed <= 31
+
+    def test_date_in_the_past_is_zero(self):
+        assert _parse_retry_after("Wed, 21 Oct 2015 07:28:00 GMT") == 0.0
+
+    def test_missing_or_garbage(self):
+        assert _parse_retry_after(None) is None
+        assert _parse_retry_after("") is None
+        assert _parse_retry_after("soon") is None
+
+    def test_http_date_header_does_not_crash(self, mocker):
+        """A Retry-After HTTP date used to crash with int(); it should be honoured instead."""
+        mock_sleep = mocker.patch("nextdnsctl.api.time.sleep")
+        rate_limited = Mock(status_code=429, headers={"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"})
+        ok = Mock(status_code=200)
+        ok.json.return_value = {"data": []}
+
+        with patch("requests.Session") as MockSession:
+            MockSession.return_value.request.side_effect = [rate_limited, ok]
+            APIClient("fake-key", retries=1).call("GET", "test")
+
+        mock_sleep.assert_called_with(0.0)
+
+    def test_exhaustion_with_retry_after_raises_rate_limit_error(self, mocker):
+        """Persistent 429s must raise RateLimitStillActiveError so the CLI aborts the batch."""
+        mocker.patch("nextdnsctl.api.time.sleep")
+        rate_limited = Mock(status_code=429, headers={"Retry-After": "1"})
+
+        with patch("requests.Session") as MockSession:
+            MockSession.return_value.request.return_value = rate_limited
+            with pytest.raises(RateLimitStillActiveError):
+                APIClient("fake-key", retries=1).call("GET", "test")
+
+
+class TestDiagnosticsOutput:
+    """Retry messages must not pollute stdout (e.g. 'export -' output)."""
+
+    def test_retry_messages_go_to_stderr(self, mocker, capsys):
+        mocker.patch("nextdnsctl.api.time.sleep")
+        server_error = Mock(status_code=500)
+        ok = Mock(status_code=200)
+        ok.json.return_value = {"data": []}
+
+        with patch("requests.Session") as MockSession:
+            MockSession.return_value.request.side_effect = [server_error, ok]
+            APIClient("fake-key", retries=1).call("GET", "test")
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "Server error" in captured.err
+
+
+class TestSharedRateLimitPause:
+    """A rate limit seen by one thread should hold off the other threads too."""
+
+    def test_other_threads_wait_for_pause(self, mocker):
+        mock_sleep = mocker.patch("nextdnsctl.api.time.sleep")
+        client = APIClient("fake-key")
+        client._pause_all(60)
+
+        result = []
+        worker = threading.Thread(target=lambda: result.append(client._wait_for_pause()))
+        worker.start()
+        worker.join()
+
+        assert mock_sleep.call_count == 1
+        assert 59 <= mock_sleep.call_args[0][0] <= 60
+
+    def test_pausing_thread_does_not_wait_twice(self, mocker):
+        mock_sleep = mocker.patch("nextdnsctl.api.time.sleep")
+        client = APIClient("fake-key")
+        client._pause_all(60)
+        client._wait_for_pause()
+        mock_sleep.assert_not_called()
 
 
 class TestNetworkErrors:

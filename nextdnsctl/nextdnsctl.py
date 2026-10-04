@@ -1,4 +1,5 @@
 import atexit
+import sys
 import threading
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
@@ -30,6 +31,7 @@ from .api import (
 )
 
 DEFAULT_CONCURRENCY = 5
+INVALID_PREVIEW_LIMIT = 10
 
 
 @dataclass(frozen=True)
@@ -77,13 +79,26 @@ def _resolve_profile_id(ctx: click.Context, profile_identifier: str) -> str:
             return profile_identifier
 
     # Otherwise, search by name (case-insensitive)
-    for profile in profiles:
-        if profile.get("name", "").lower() == profile_identifier.lower():
-            return profile["id"]
+    matches = [p for p in profiles if p.get("name", "").lower() == profile_identifier.lower()]
+    if len(matches) == 1:
+        return matches[0]["id"]
+    if len(matches) > 1:
+        ids = ", ".join(p["id"] for p in matches)
+        raise click.ClickException(
+            f"Profile name '{profile_identifier}' is ambiguous (matches {ids}). Use the profile ID instead."
+        )
 
     # No match found
     available = ", ".join(f"'{p.get('name')}' ({p.get('id')})" for p in profiles)
     raise click.ClickException(f"Profile '{profile_identifier}' not found. " f"Available profiles: {available}")
+
+
+def _fetch_domain_list(client: APIClient, profile_id: str, list_type: str) -> list[dict[str, Any]]:
+    """Fetch a list, turning API failures into a clean CLI error instead of a traceback."""
+    try:
+        return client.get_domain_list(profile_id, list_type)
+    except Exception as e:
+        raise click.ClickException(f"Failed to fetch {list_type}: {e}")
 
 
 def _validate_domains(domains: Sequence[str]) -> tuple[list[str], list[str]]:
@@ -509,9 +524,26 @@ def cli(ctx, retry_attempts, retry_delay, timeout, concurrency, dry_run):
 
 
 @cli.command()
-@click.argument("api_key")
+@click.argument("api_key", required=False)
 def auth(api_key):
-    """Save your NextDNS API key."""
+    """Save your NextDNS API key.
+
+    Run without an argument to be prompted for the key (or pipe it on stdin), so it
+    doesn't end up in your shell history.
+    """
+    if api_key:
+        click.echo(
+            "Warning: passing the API key as an argument stores it in your shell history. "
+            "Run 'nextdnsctl auth' without an argument to be prompted instead.",
+            err=True,
+        )
+    elif sys.stdin.isatty():
+        api_key = click.prompt("NextDNS API key", hide_input=True)
+    else:
+        api_key = sys.stdin.readline()
+    api_key = api_key.strip()
+    if not api_key:
+        raise click.ClickException("No API key provided.")
     try:
         save_api_key(api_key)
         # Verify it works by making a test call
@@ -739,7 +771,7 @@ def _handle_add_command(
 
     profile_id = _resolve_profile_id(ctx, profile)
     client: APIClient = ctx.obj["client"]
-    existing_entries = client.get_domain_list(profile_id, list_type)
+    existing_entries = _fetch_domain_list(client, profile_id, list_type)
     desired_active = not inactive
     plan = _plan_domain_additions(valid_domains, existing_entries, desired_active, update_existing)
 
@@ -774,7 +806,7 @@ def _handle_remove_command(
 
     profile_id = _resolve_profile_id(ctx, profile)
     client: APIClient = ctx.obj["client"]
-    existing_entries = client.get_domain_list(profile_id, list_type)
+    existing_entries = _fetch_domain_list(client, profile_id, list_type)
     plan = _plan_domain_removals(valid_domains, existing_entries)
 
     _execute_removal_plan(ctx, client, profile_id, list_type, plan)
@@ -808,13 +840,21 @@ def _handle_import_command(
     # Validate domains
     valid_domains, invalid_domains = _validate_domains(raw_domains)
     if invalid_domains:
-        click.echo(f"Skipped {len(invalid_domains)} invalid domain(s).", err=True)
+        click.echo(f"Skipped {len(invalid_domains)} invalid domain(s):", err=True)
+        for error in invalid_domains[:INVALID_PREVIEW_LIMIT]:
+            click.echo(f"  - {error}", err=True)
+        if len(invalid_domains) > INVALID_PREVIEW_LIMIT:
+            click.echo(f"  ... {len(invalid_domains) - INVALID_PREVIEW_LIMIT} more", err=True)
+        click.echo(
+            "Warning: in nextdnsctl 2.0, invalid lines will make the import fail instead of being skipped.",
+            err=True,
+        )
 
     if not valid_domains:
         click.echo("No valid domains to import.", err=True)
         return
 
-    existing_entries = client.get_domain_list(profile_id, list_type)
+    existing_entries = _fetch_domain_list(client, profile_id, list_type)
     desired_active = not inactive
     plan = _plan_domain_additions(valid_domains, existing_entries, desired_active, update_existing)
     _execute_add_plan(ctx, client, profile_id, list_type, plan, desired_active, update_existing)
@@ -904,7 +944,7 @@ def _handle_clear_command(
         success = _perform_domain_operations(ctx, domains, operation, item_name_singular="domain", action_verb="remove")
         if not success:
             ctx.exit(1)
-    except click.Abort:
+    except (click.Abort, click.exceptions.Exit):
         raise
     except Exception as e:
         click.echo(f"Error clearing {list_type}: {e}", err=True)

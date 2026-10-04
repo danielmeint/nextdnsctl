@@ -34,7 +34,7 @@ Requires Python 3.10+.
 
 ```bash
 # Authenticate (find your API key at https://my.nextdns.io/account)
-nextdnsctl auth <your-api-key>
+nextdnsctl auth
 
 # List your profiles
 nextdnsctl profile-list
@@ -58,9 +58,12 @@ The API key can be provided in two ways (in order of priority):
 
 2. **Config file** (created by `auth` command):
    ```bash
-   nextdnsctl auth <your-api-key>
+   nextdnsctl auth            # prompts for the key without echoing it
+   # or: pbpaste | nextdnsctl auth
    # Stored in ~/.nextdnsctl/config.json with secure permissions
    ```
+   Passing the key as an argument (`nextdnsctl auth <key>`) still works, but stores it in
+   your shell history.
 
 ## Global Options
 
@@ -130,6 +133,10 @@ The import file format supports:
 - Comments starting with `#`
 - Inline comments (e.g., `example.com # reason`)
 - Empty lines (ignored)
+
+Domains are normalised the way NextDNS expects them: lowercased, internationalized names
+converted to punycode (`münchen.de` → `xn--mnchen-3ya.de`), and a trailing dot removed.
+Invalid lines are skipped and listed. In 2.0 they will make the import fail instead.
 
 Import is delta-aware: `nextdnsctl` fetches the current list once, deduplicates the
 input, and only sends API writes for missing domains. This reduces rate-limit pressure

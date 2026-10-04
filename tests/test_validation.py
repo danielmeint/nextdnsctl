@@ -151,3 +151,35 @@ class TestDomainValidation:
             validate_domain("http://")
         with pytest.raises(InvalidDomainError, match="cannot be empty"):
             validate_domain("https://")
+
+    def test_accepts_underscores(self):
+        """NextDNS accepts underscores in labels (e.g. service records)."""
+        assert validate_domain("under_score.com") == "under_score.com"
+        assert validate_domain("_dmarc.example.com") == "_dmarc.example.com"
+
+    def test_accepts_punycode_tld(self):
+        """Punycode TLDs (internationalized TLDs) are valid."""
+        assert validate_domain("xn--80ak6aa92e.xn--p1ai") == "xn--80ak6aa92e.xn--p1ai"
+
+    def test_converts_unicode_to_punycode(self):
+        """Internationalized names are converted to the punycode form NextDNS requires."""
+        assert validate_domain("münchen.de") == "xn--mnchen-3ya.de"
+        assert validate_domain("MÜNCHEN.de") == "xn--mnchen-3ya.de"
+
+    def test_strips_single_trailing_dot(self):
+        """A fully-qualified name with a trailing dot is the same name."""
+        assert validate_domain("example.com.") == "example.com"
+        with pytest.raises(InvalidDomainError):
+            validate_domain("example.com..")
+
+    def test_rejects_hyphen_at_edge_of_inner_label(self):
+        """Every label, not just the first, must not start or end with a hyphen."""
+        for domain in ["a.-b.com", "a.b-.com"]:
+            with pytest.raises(InvalidDomainError, match="Invalid domain format"):
+                validate_domain(domain)
+
+    def test_rejects_wildcards_and_ips(self):
+        """Wildcards and IP addresses are not domains."""
+        for domain in ["*.example.com", "1.2.3.4"]:
+            with pytest.raises(InvalidDomainError, match="Invalid domain format"):
+                validate_domain(domain)
