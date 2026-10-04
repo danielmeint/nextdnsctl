@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import sys
 from typing import Any, Optional
 
 import click
@@ -15,6 +14,7 @@ from ..config import DEFAULT_FILE, ConfigError
 from ..planner import Planner, PlanError
 from ..pull import DuplicateNameError
 from ..sources import SourceError
+from .status import StatusAwareHandler, request_indicator, status
 
 EXIT_ERROR = 1
 EXIT_CHANGES = 2  # plan: there are changes
@@ -25,7 +25,9 @@ EXPECTED_ERRORS = (ConfigError, PlanError, NextDNSError, NoAPIKeyError, SourceEr
 
 def make_client(api_key: str, timeout: float = DEFAULT_TIMEOUT) -> Client:
     """Create the API client. Tests replace this to talk to a fake API."""
-    return Client(api_key, timeout=timeout)
+    client = Client(api_key, timeout=timeout)
+    client.hooks = request_indicator
+    return client
 
 
 class State:
@@ -52,7 +54,7 @@ class State:
     @property
     def planner(self) -> Planner:
         if self._planner is None:
-            self._planner = Planner(self.client)
+            self._planner = Planner(self.client, progress=status.update)
         return self._planner
 
     def require_profile(self) -> str:
@@ -114,15 +116,18 @@ def cli(ctx: click.Context, profile, file, json_output, verbose, quiet, timeout,
 
     Choose the profile with -p NAME or the NEXTDNS_PROFILE environment variable.
     """
-    level = logging.ERROR if quiet else logging.DEBUG if verbose else logging.WARNING
-    _configure_logging(level)
+    level = logging.ERROR if quiet else logging.DEBUG if verbose else logging.INFO
+    _configure_logging(level, verbose)
+    status.enabled = status.enabled and not quiet
     ctx.obj = State(
         profile=profile, file=file, json_output=json_output, verbose=verbose, timeout=timeout, dry_run=dry_run
     )
 
 
-def _configure_logging(level: int) -> None:
-    handler = logging.StreamHandler(sys.stderr)
+def _configure_logging(level: int, verbose: bool) -> None:
+    # INFO records (e.g. short rate-limit waits) reach the handler, which shows them in the
+    # status line unless --verbose prints everything.
+    handler = StatusAwareHandler(verbose)
     handler.setFormatter(_Formatter())
     root = logging.getLogger("nextdnsctl")
     root.handlers[:] = [handler]

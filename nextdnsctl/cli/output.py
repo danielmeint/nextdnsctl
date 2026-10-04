@@ -11,6 +11,7 @@ import click
 from ..executor import ApplyResult
 from ..model import Diff
 from ..planner import ProfilePlan
+from .status import status
 
 PREVIEW = 20
 
@@ -176,8 +177,10 @@ def render_result(result: ApplyResult) -> list[str]:
 
 
 def warn(message: str) -> None:
-    click.echo("warning: " + message, err=True)
+    with status.suspended():
+        click.echo("warning: " + message, err=True)
 
 
 def info(message: Optional[str] = None) -> None:
-    click.echo(message or "", err=True)
+    with status.suspended():
+        click.echo(message or "", err=True)

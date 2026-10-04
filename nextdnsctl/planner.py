@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import difflib
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from . import sources as sources_mod
 from .client import MAX_BODY_BYTES, WRITE_INTERVAL, Client, NextDNSError, encode_body
@@ -38,6 +39,13 @@ log = logging.getLogger(__name__)
 # Leave headroom below the hard limit for anything we don't account for.
 SAFE_BODY_BYTES = MAX_BODY_BYTES - 4 * 1024
 SOURCE_ERROR_PREVIEW = 20
+PREFETCH_WORKERS = 4
+
+
+def _fetching_message(profiles: list[dict[str, Any]], done: int) -> str:
+    if len(profiles) == 1:
+        return f"Fetching profile {profiles[0].get('name', profiles[0]['id'])}"
+    return f"Fetching {len(profiles)} profiles ({done}/{len(profiles)} done)"
 
 
 class PlanError(Exception):
@@ -106,11 +114,19 @@ class ProfilePlan:
 
 
 class Planner:
-    def __init__(self, client: Client, *, validate_catalogs: bool = True):
+    def __init__(
+        self,
+        client: Client,
+        *,
+        validate_catalogs: bool = True,
+        progress: Optional[Callable[[str], None]] = None,
+    ):
         self.client = client
         self.validate_catalogs = validate_catalogs
+        self.progress = progress or (lambda message: None)
         self._profiles: Optional[list[dict[str, Any]]] = None
         self._catalogs: dict[str, Optional[set[str]]] = {}
+        self._prefetched: dict[str, dict[str, Any]] = {}
 
     # ── profiles ───────────────────────────────────────────────────────────
 
@@ -147,8 +163,28 @@ class Planner:
         return profile
 
     def live(self, profile_id: str) -> dict[str, Any]:
-        """The profile as returned by the API (not canonicalised)."""
+        """The profile as returned by the API (not canonicalised).
+
+        A prefetched copy is used once; later calls (e.g. verifying after apply) fetch afresh.
+        """
+        if profile_id in self._prefetched:
+            return self._prefetched.pop(profile_id)
         return self.client.get_profile(profile_id)
+
+    def prefetch(self, profiles: list[dict[str, Any]]) -> None:
+        """Fetch several profiles in parallel. NextDNS sometimes takes many seconds per
+        profile, so the wait becomes the slowest profile rather than the sum."""
+        pending = [p for p in profiles if p["id"] not in self._prefetched]
+        if not pending:
+            return
+        done = 0
+        self.progress(_fetching_message(pending, done))
+        with ThreadPoolExecutor(max_workers=min(PREFETCH_WORKERS, len(pending))) as pool:
+            futures = {pool.submit(self.client.get_profile, p["id"]): p for p in pending}
+            for future in as_completed(futures):
+                self._prefetched[futures[future]["id"]] = future.result()
+                done += 1
+                self.progress(_fetching_message(pending, done))
 
     # ── planning ───────────────────────────────────────────────────────────
 
@@ -204,6 +240,7 @@ class Planner:
         return resolved
 
     def _read_source(self, source: SourceSpec, warnings: list[str]) -> list[tuple[str, Origin]]:
+        self.progress(f"Reading {source.location}")
         try:
             result = sources_mod.load(source.location, source.format)
         except sources_mod.SourceError as e:

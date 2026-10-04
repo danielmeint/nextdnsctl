@@ -10,7 +10,7 @@ import json
 import logging
 import threading
 import time
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional, Protocol
 
 import requests
 
@@ -103,6 +103,14 @@ def encode_body(data: Any) -> bytes:
     return json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
+class RequestHooks(Protocol):
+    """Notified around every request (including waits for pacing and rate limits)."""
+
+    def started(self, method: str, path: str) -> None: ...
+
+    def finished(self) -> None: ...
+
+
 class Pacer:
     """Spaces calls at least `interval` seconds apart. Thread-safe."""
 
@@ -150,6 +158,7 @@ class Client:
         if api_key:
             self.session.headers["X-Api-Key"] = api_key
         self._sleep = sleep
+        self.hooks: Optional[RequestHooks] = None
         self.writes = Pacer(write_interval, clock, sleep)
         self.reads = Pacer(read_interval, clock, sleep)
 
@@ -157,6 +166,16 @@ class Client:
 
     def request(self, method: str, path: str, body: Any = None, params: Optional[dict] = None) -> Any:
         """Send a request and return the parsed JSON body (None for 204)."""
+        if self.hooks is None:
+            return self._request(method, path, body, params)
+        # Covers pacing and rate-limit waits too, so a UI can show that something is happening.
+        self.hooks.started(method, path)
+        try:
+            return self._request(method, path, body, params)
+        finally:
+            self.hooks.finished()
+
+    def _request(self, method: str, path: str, body: Any, params: Optional[dict]) -> Any:
         path = path.lstrip("/")
         payload = encode_body(body) if body is not None else None
         if payload is not None and len(payload) > MAX_BODY_BYTES:
@@ -170,6 +189,7 @@ class Client:
 
         while True:
             pacer.wait()
+            started = time.monotonic()
             try:
                 response = self.session.request(
                     method, self.base_url + path, data=payload, params=params, headers=headers, timeout=self.timeout
@@ -184,6 +204,7 @@ class Client:
                 raise NetworkError(f"{method} {path}: {e}") from e
 
             status = response.status_code
+            log.debug("%s %s → %d (%.1fs)", method, path, status, time.monotonic() - started)
             if status == 429:
                 if rate_limited >= len(RATE_LIMIT_BACKOFF):
                     raise RateLimitError(

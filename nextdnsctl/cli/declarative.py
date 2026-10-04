@@ -14,6 +14,7 @@ from ..executor import ApplyResult, Executor
 from ..planner import Op, ProfilePlan
 from . import EXIT_CHANGES, EXIT_ERROR, EXIT_PARTIAL, State, cli, pass_state
 from .output import emit_json, info, plan_to_json, render_plan, render_result, result_to_json, warn
+from .status import status, working
 
 
 @cli.command()
@@ -29,8 +30,10 @@ def pull(state: State, profiles: tuple[str, ...], to_stdout: bool, force: bool) 
     """
     planner = state.planner
     names = profiles or ((state.profile,) if state.profile else ())
-    targets = [planner.require_profile(n) for n in names] if names else planner.profiles()
-    text = pull_mod.document([planner.live(p["id"]) for p in targets])
+    with working("Fetching the profile list"):
+        targets = [planner.require_profile(n) for n in names] if names else planner.profiles()
+        planner.prefetch(targets)
+        text = pull_mod.document([planner.live(p["id"]) for p in targets])
 
     if to_stdout:
         click.echo(text, nl=False)
@@ -64,7 +67,15 @@ def _make_plans(state: State, profiles: tuple[str, ...]) -> list[ProfilePlan]:
         for profile in cfg.select(name):
             if profile not in selected:
                 selected.append(profile)
-    return [state.planner.plan(p) for p in selected]
+    planner = state.planner
+    with working("Fetching the profile list") as line:
+        found = [planner.find_profile(p.key, p.id) for p in selected]
+        planner.prefetch([f for f in found if f is not None])
+        plans = []
+        for profile in selected:
+            line.update(f"Planning {profile.key}")
+            plans.append(planner.plan(profile))
+    return plans
 
 
 def _show_plans(state: State, plans: list[ProfilePlan]) -> None:
@@ -150,10 +161,14 @@ def run_plans(state: State, plans: list[ProfilePlan]) -> list[ApplyResult]:
 
 def _apply_one(state: State, executor: Executor, plan: ProfilePlan) -> ApplyResult:
     if not plan.ops or state.json or not sys.stderr.isatty():
-        return executor.apply(plan)
-    with click.progressbar(
-        length=len(plan.ops), label=f"{plan.key}: writing", file=sys.stderr, show_eta=True, show_pos=True
-    ) as bar:
+        with working(f"Applying changes to {plan.key}"):
+            return executor.apply(plan)
+    with (
+        status.paused(),
+        click.progressbar(
+            length=len(plan.ops), label=f"{plan.key}: writing", file=sys.stderr, show_eta=True, show_pos=True
+        ) as bar,
+    ):
 
         def progress(op: Op, error: Optional[str]) -> None:
             bar.update(1)
