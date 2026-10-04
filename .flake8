@@ -6,3 +6,5 @@ exclude =
     build,
     dist
 max-line-length = 120
+# E203 conflicts with black's slice formatting
+extend-ignore = E203

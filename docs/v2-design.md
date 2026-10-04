@@ -45,7 +45,7 @@ document `PUT` for arrays (see A5) and say nothing about rate limits or catalogs
 | A8 | Domain ids must be lowercase ASCII (punycode OK, `_` OK, punycode TLDs OK). Rejected: uppercase, Unicode, wildcards, trailing dot, IPs, single labels. | Client normalises case and IDNA; validation regex matches the server's. |
 | A9 | Errors carry a JSON pointer (`/1/id`) for format errors, but **not** for unknown catalog ids (bare `invalid`). | Map pointers back to file:line; for catalog ids, bisect or validate against a catalog. |
 | A10 | Rewrites are **not** patchable via the profile (`extraneous`), have no PUT, get server-assigned ids, and allow several records per name. | Separate incremental diff keyed on `(name, content)`. |
-| A11 | Rate limits are **fixed 60 s windows per API key** (shared across all profiles), with separate budgets: **60 writes/min** and **300 reads/min**. Exhausting writes doesn't block reads. A `PATCH` costs one write regardless of size. Pacing at 1 write/s ran 150 s without a 429. **No `Retry-After`** header, ever. | Pace writes at ≤1/s; per-domain mode ≈ 60 domains/min. Concurrency buys nothing. Reads rarely need throttling. |
+| A11 | Writes: **60 per fixed 60 s window per API key** (shared across all profiles). A `PATCH` costs one write regardless of size. Pacing at 1 write/s ran 150 s without a 429. Reads have a separate budget that **depends on the endpoint**: 300/min for `GET …/denylist`, but full-profile `GET /profiles/:id` was throttled after 30 requests in 7 s (and `GET /profiles` after 3 when the API was slow), recovering within seconds. Exhausting writes doesn't block reads. **No `Retry-After`** header, ever. | Pace writes at ≤1/s; per-domain mode ≈ 60 domains/min; concurrency buys nothing. On a 429, back off 2, 4, 8, 16, 30, 30 s: short for reads, still spanning a write window. Keep full-profile GETs to one per profile per command. |
 | A12 | `GET /profiles/:id` includes `setup.linkedIp.updateToken` and read-only metadata (blocklist `entries`/`updatedOn`, service `website`, `fingerprint`, `role`). | `pull` strips these; diffs ignore them. |
 | A13 | `POST /profiles {"name"}` and `DELETE /profiles/:id` work. New profiles have **logging disabled** by default. | Ephemeral profiles for live tests; enable logs on them first. |
 | A14 | `/logs`: `limit` 10–1000, cursor pagination, `status=blocked` and `search=` filters work, `meta.stream.id` for stitching. Blocked entries carry `reasons: [{id, name}]` (e.g. `denylist`). `/logs/stream` is SSE (`id:` + `data:` JSON, resume with `?id=`) but **sends no headers until the first event** and delivered only 2 of 10 queries that `/logs` had. | `why` uses `/logs?search=&status=blocked`. `logs --follow` polls `/logs` (cheap under A11) rather than trusting the stream. |
@@ -187,8 +187,9 @@ from the limiter ("~1 840 writes, ~32 min at the API's rate limit").
 - Incremental ops go through **one sequential worker paced at 1 write/s** (A11). The
   budget is per key and the windows are fixed, so concurrency can't go faster. It only
   burns the window sooner. v1's thread pool and `--concurrency` go away.
-- On a 429 (another tool or a second nextdnsctl using the same key), pause and retry every
-  10 s for up to 70 s, which always spans one fixed window. There is no `Retry-After` to read.
+- On a 429 (another tool or a second nextdnsctl using the same key), back off 2, 4, 8, 16,
+  30, 30 s before giving up. Read limits clear within seconds; the total spans a write window.
+  There is no `Retry-After` to read.
 - Treat `200` with an `errors` body as a failure (A5/A6). A6 cases (`duplicate` on POST,
   `404` on DELETE) count as converged.
 - Retries: network errors and 5xx on *small* requests only; an oversize body is
@@ -256,6 +257,8 @@ nextdnsctl/
   sources.py      # plain/hosts/adblock parsers, fetch
   planner.py      # diff + write strategy
   executor.py     # runs a plan, verifies convergence
+  domains.py      # domain validation and normalisation (A8, A16)
+  pull.py         # live profiles → YAML
   auth.py         # key storage, XDG paths
 ```
 
@@ -301,15 +304,15 @@ deprecation warnings for what 2.0 changes.
 
 ## Milestones
 
-1. **1.4** bugfixes (above). ✅ on `release-1.4`, not yet released.
-2. **Engine core**: client + limiter, model/normaliser, fake API, planner for denylist
-   and allowlist only, atomic PATCH path. Rebuild the v1 shortcuts on it.
-3. **Parsers**: plain/hosts/adblock/auto with strict errors.
-4. **Declarative**: config file, `pull`/`plan`/`apply` for lists, then the object
-   sections, then rewrites (incremental path).
-5. **Large lists**: size split + limiter-paced incremental path; estimates in `plan`.
-6. **Observability**: `logs` (polling, A14), `why`, `catalog`.
-7. **2.0 release**: docs, migration notes, live test pass.
+1. **1.4** bugfixes (above). ✅ released 2026-10-04.
+2. **Engine core**: client + limiter, model/normaliser, fake API, planner, atomic PATCH
+   path, v1 shortcuts rebuilt on it. ✅
+3. **Parsers**: plain/hosts/adblock/auto with strict errors. ✅
+4. **Declarative**: config file, `pull`/`plan`/`apply` for all sections and rewrites. ✅
+5. **Large lists**: size split + paced incremental path; estimates in `plan`. ✅
+6. **Observability**: `logs` (polling, A14), `why`, `catalog`. ✅
+7. **2.0 release**: docs, migration notes ([migrating-to-2.md](migrating-to-2.md)), live
+   test pass (`just test-live`). ✅ live round trip passing; release pending.
 
 ## Decisions (formerly open questions)
 

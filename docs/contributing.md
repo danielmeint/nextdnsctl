@@ -12,13 +12,16 @@ Thanks for your interest in contributing!
 ## Development Setup
 - Install Python 3.10+.
 - Clone your fork: `git clone https://github.com/<your-username>/nextdnsctl.git`.
-- Install dependencies: `pip install -r requirements-dev.txt`.
-- Run locally: `python -m nextdnsctl.nextdnsctl`.
+- Set up: `just setup` (or `python -m venv .venv && .venv/bin/pip install -e ".[dev]"`).
+- Run locally: `.venv/bin/nextdnsctl --help`.
+- Checks: `just check` (lint, types, tests). Tests run against an in-memory fake of the
+  NextDNS API (`tests/fake_api.py`) that reproduces its observed behaviour; if you find
+  the real API behaving differently, update the fake and `docs/v2-design.md` together.
+- Live round trip: `NEXTDNS_API_KEY=… just test-live` creates and deletes a temporary profile.
 
 ## Ideas
-- Implement full config sync (JSON/YAML).
 - Support other DNS services (e.g., ControlD).
-- Add support for managing other NextDNS settings (e.g., security settings, logging).
+- See "Open questions" and "Milestones" in [the design doc](v2-design.md).
 
 ## Code Style
 - Follow PEP 8 for Python.

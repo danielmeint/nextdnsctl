@@ -4,9 +4,14 @@
 default:
     @just --list
 
-# Run all tests
+# Run all tests (live API tests are excluded; see test-live)
 test:
     .venv/bin/python -m pytest tests/ -v
+
+# Run the round-trip tests against the real NextDNS API (needs NEXTDNS_API_KEY;
+# creates and deletes a temporary profile)
+test-live:
+    .venv/bin/python -m pytest tests/ -v -m live
 
 # Run tests with coverage
 test-cov:
@@ -31,11 +36,6 @@ fmt:
 install-dev:
     .venv/bin/pip install -e ".[dev]"
 
-# Install dependencies
-install-deps:
-    .venv/bin/pip install -r requirements.txt
-    .venv/bin/pip install -r requirements-dev.txt
-
 # Build distribution packages
 build:
     rm -rf dist/
@@ -52,7 +52,7 @@ release version:
     @echo "Updating version to {{version}}..."
     sed -i '' 's/__version__ = ".*"/__version__ = "{{version}}"/' nextdnsctl/__init__.py
     git add nextdnsctl/__init__.py
-    git commit -m "Bump version to {{version}}"
+    git commit -m "Release {{version}}"
     git tag -a "v{{version}}" -m "Release v{{version}}"
     git push origin main
     git push origin "v{{version}}"
@@ -82,5 +82,5 @@ pre-commit:
     .venv/bin/pre-commit run --all-files
 
 # Setup development environment from scratch
-setup: venv install-deps install-dev hooks
+setup: venv install-dev hooks
     @echo "Development environment ready!"
