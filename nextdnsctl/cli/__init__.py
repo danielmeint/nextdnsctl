@@ -40,7 +40,15 @@ class State:
     """Shared per-invocation state, created lazily so `--help` and `auth` need no API key."""
 
     def __init__(
-        self, *, profile: Optional[str], file: str, json_output: bool, verbose: bool, timeout: float, dry_run: bool
+        self,
+        *,
+        profile: Optional[str],
+        file: str,
+        json_output: bool,
+        verbose: bool,
+        timeout: float,
+        dry_run: bool,
+        allow_gaps: bool = False,
     ):
         self.profile = profile
         self.file = file
@@ -48,6 +56,7 @@ class State:
         self.verbose = verbose
         self.timeout = timeout
         self.dry_run = dry_run
+        self.allow_gaps = allow_gaps
         self._client: Optional[Client] = None
         self._planner: Optional[Planner] = None
 
@@ -60,7 +69,7 @@ class State:
     @property
     def planner(self) -> Planner:
         if self._planner is None:
-            self._planner = Planner(self.client, progress=status.update)
+            self._planner = Planner(self.client, allow_gaps=self.allow_gaps, progress=status.update)
         return self._planner
 
     def require_profile(self) -> str:
@@ -115,11 +124,17 @@ def _deprecated_noop(ctx: click.Context, param: click.Parameter, value: Any) -> 
 @click.option("-q", "--quiet", is_flag=True, help="Only show errors.")
 @click.option("--timeout", type=float, default=DEFAULT_TIMEOUT, show_default=True, help="Request timeout in seconds.")
 @click.option("--dry-run", is_flag=True, help="Show what would change without changing anything.")
+@click.option(
+    "--allow-gaps",
+    is_flag=True,
+    help="For a list too large for one request, allow entries it keeps to be missing for a few "
+    "minutes while they're re-added, if that saves many writes.",
+)
 @click.option("--concurrency", type=int, hidden=True, callback=_deprecated_noop, expose_value=False)
 @click.option("--retry-attempts", type=int, hidden=True, callback=_deprecated_noop, expose_value=False)
 @click.option("--retry-delay", type=float, hidden=True, callback=_deprecated_noop, expose_value=False)
 @click.pass_context
-def cli(ctx: click.Context, profile, file, json_output, verbose, quiet, timeout, dry_run) -> None:
+def cli(ctx: click.Context, profile, file, json_output, verbose, quiet, timeout, dry_run, allow_gaps) -> None:
     """Bulk-edit, import and back up NextDNS denylists and allowlists.
 
     \b
@@ -135,7 +150,13 @@ def cli(ctx: click.Context, profile, file, json_output, verbose, quiet, timeout,
     _configure_logging(level, verbose)
     status.enabled = status.enabled and not quiet
     ctx.obj = State(
-        profile=profile, file=file, json_output=json_output, verbose=verbose, timeout=timeout, dry_run=dry_run
+        profile=profile,
+        file=file,
+        json_output=json_output,
+        verbose=verbose,
+        timeout=timeout,
+        dry_run=dry_run,
+        allow_gaps=allow_gaps,
     )
 
 

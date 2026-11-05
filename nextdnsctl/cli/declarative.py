@@ -125,7 +125,7 @@ def apply(state: State, profiles: tuple[str, ...], yes: bool) -> None:
             emit_json({"profiles": [plan_to_json(p) for p in plans]})
         return
     confirm(pending, yes)
-    run_plans(state, pending)
+    run_plans(state, pending, confirmed=not yes)
 
 
 def confirm(plans: list[ProfilePlan], yes: bool) -> None:
@@ -144,8 +144,9 @@ def confirm(plans: list[ProfilePlan], yes: bool) -> None:
     click.confirm(question, abort=True, err=True)
 
 
-def run_plans(state: State, plans: list[ProfilePlan]) -> list[ApplyResult]:
-    executor = Executor(state.client, state.planner)
+def run_plans(state: State, plans: list[ProfilePlan], confirmed: bool = False) -> list[ApplyResult]:
+    """Apply the plans. `confirmed`: the user approved them, so ask again if one has to change."""
+    executor = Executor(state.client, state.planner, on_rebase=lambda old, new: _rebased(state, new, confirmed))
     results = []
     for plan in plans:
         results.append(_apply_one(state, executor, plan))
@@ -160,6 +161,18 @@ def run_plans(state: State, plans: list[ProfilePlan]) -> list[ApplyResult]:
     if not all(r.ok for r in results):
         sys.exit(EXIT_ERROR)
     return results
+
+
+def _rebased(state: State, plan: ProfilePlan, ask: bool) -> bool:
+    """The profile changed in NextDNS after the plan was made; show the new plan (and ask again)."""
+    with status.paused():
+        warn(f"{plan.key} changed in NextDNS since it was read, so the plan was made again:")
+        if not state.json:
+            for line in render_plan(plan, state.verbose):
+                click.echo(line, err=True)
+        if ask and plan.has_changes:
+            return click.confirm("Apply the new plan?", err=True)
+    return True
 
 
 def _apply_one(state: State, executor: Executor, plan: ProfilePlan) -> ApplyResult:

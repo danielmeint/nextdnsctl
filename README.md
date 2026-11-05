@@ -121,9 +121,16 @@ lines with a warning instead. Note that a hosts entry blocks one exact name, whi
 denylist entry also covers its subdomains.
 
 As long as the resulting list stays under roughly 2 000 domains, any change to it is a single
-request. Beyond that, changes are applied entry by entry, paced to NextDNS's limit of about
-60 writes per minute: importing 10 000 domains takes about three hours. For lists that size, prefer NextDNS's built-in blocklists (under **Privacy**)
-and keep the denylist for your own additions and overrides.
+request. Beyond that, one request carries every domain the list keeps plus as many new ones
+as fit, and the rest are added one by one, paced to NextDNS's limit of about 60 writes per
+minute: importing 10 000 domains takes a bit over two hours. For lists that size,
+prefer NextDNS's built-in blocklists (under **Privacy**) and keep the denylist for your own
+additions and overrides.
+
+Removing many domains from a list that big is done one by one too, because the domains it
+keeps don't fit in one request. `--allow-gaps` makes it much faster by sending as many kept
+domains as fit and re-adding the others right after, so for a few minutes those aren't
+blocked (or, on the allowlist, aren't allowed). `plan` and `--dry-run` show when it would help.
 
 ## More commands
 
@@ -217,6 +224,7 @@ If an apply is interrupted, run it again: it only sends what's still missing.
 |---|---|
 | `-p, --profile` | Profile name or id (or `NEXTDNS_PROFILE`) |
 | `--dry-run` | Show what would change without changing anything |
+| `--allow-gaps` | For a list too large for one request, let domains it keeps be missing for a few minutes if that saves many writes ([details](#importing-block-lists)) |
 | `--json` | Machine-readable output on stdout |
 | `-v` / `-q` | Show every entry and request / only errors |
 | `-f, --file` | Profile file for `pull`/`plan`/`apply` (default `nextdns.yaml`, or `NEXTDNS_FILE`) |

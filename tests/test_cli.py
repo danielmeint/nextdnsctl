@@ -301,3 +301,131 @@ def test_rejected_key_message(runner, monkeypatch):
     assert result.exit_code == 1
     assert "NextDNS rejected the API key (from NEXTDNS_API_KEY)" in result.output
     assert "auth login" in result.output
+
+
+@pytest.fixture
+def small_requests(monkeypatch):
+    from nextdnsctl import planner as planner_mod
+
+    monkeypatch.setattr(planner_mod, "SAFE_BODY_BYTES", 2048)
+
+
+def many(prefix, count):
+    return [f"{prefix}-{i}.example.com" for i in range(count)]
+
+
+@pytest.mark.usefixtures("keyed")
+class TestWriteStrategy:
+    def test_adding_one_domain_is_one_post(self, runner, fake, home):
+        result = run(runner, "-p", "home", "denylist", "add", "a.com")
+        assert result.exit_code == 0, result.output
+        assert fake.writes() == [("POST", "profiles/abc123/denylist", {"id": "a.com", "active": True})]
+        assert "1 individual write" in result.output
+
+    def test_plan_shows_split_and_gap_hint(self, runner, fake, home, tmp_path, small_requests):
+        home["denylist"] = [{"id": d, "active": True} for d in many("k", 400)]
+        file = tmp_path / "nextdns.yaml"
+        file.write_text(
+            "version: 1\nprofiles:\n  Home:\n    denylist:\n"
+            + "".join(f"      - {d}\n" for d in many("k", 120))
+            + "    allowlist:\n"
+            + "".join(f"      - {d}\n" for d in many("a", 60))
+            + "    security: {nrd: true}\n"
+        )
+        result = runner.invoke(cli, ["-f", str(file), "plan"])
+        assert result.exit_code == 2, result.output
+        assert "denylist is too large for one request: changed entry by entry" in result.output
+        assert "With --allow-gaps:" in result.output
+
+        result = runner.invoke(cli, ["-f", str(file), "--allow-gaps", "--json", "plan"])
+        writes = json.loads(result.stdout)["profiles"][0]["writes"]
+        assert writes["partial_sections"] == ["denylist"] and writes["incremental_sections"] == []
+        assert writes["atomic_updates"] == 2 and writes["gap_entries"] > 0
+
+        result = runner.invoke(cli, ["-f", str(file), "--allow-gaps", "plan"])
+        assert "2 atomic updates" in result.output
+        assert "will be missing" in result.output
+
+        result = run(runner, "-f", str(file), "--allow-gaps", "apply", "--yes")
+        assert result.exit_code == 0, result.output
+        assert sorted(e["id"] for e in home["denylist"]) == sorted(many("k", 120))
+        assert len(home["allowlist"]) == 60
+
+
+@pytest.mark.usefixtures("keyed")
+class TestChangedDuringConfirmation:
+    """NextDNS changes while the confirmation prompt is open."""
+
+    @pytest.fixture
+    def meanwhile(self, monkeypatch, fake, home, clock):
+        from nextdnsctl.cli import declarative, lists
+
+        def confirmed(plans, yes):
+            home["denylist"].insert(0, {"id": "concurrent.com", "active": True})
+            clock.now += 60
+
+        monkeypatch.setattr(declarative, "confirm", confirmed)
+        monkeypatch.setattr(lists, "confirm", confirmed)
+
+    @pytest.fixture
+    def file(self, tmp_path):
+        path = tmp_path / "nextdns.yaml"
+        path.write_text("version: 1\nprofiles:\n  Home:\n    denylist: [a.com, b.com]\n")
+        return str(path)
+
+    def test_apply_shows_the_new_plan_and_can_be_declined(self, runner, fake, home, file, meanwhile):
+        result = runner.invoke(cli, ["-f", file, "apply"], input="n\n")
+        assert "changed in NextDNS since it was read" in result.output
+        assert "− concurrent.com" in result.output
+        assert "Home: not applied" in result.output
+        assert result.exit_code == 1
+        assert not fake.writes()
+        assert any(e["id"] == "concurrent.com" for e in home["denylist"])
+
+    def test_apply_after_accepting_the_new_plan(self, runner, fake, home, file, meanwhile):
+        result = runner.invoke(cli, ["-f", file, "apply"], input="y\n")
+        assert result.exit_code == 0, result.output
+        assert sorted(e["id"] for e in home["denylist"]) == ["a.com", "b.com"]
+
+    def test_clear_asks_again(self, runner, fake, home, meanwhile):
+        home["denylist"].append({"id": "other.com", "active": True})  # 2 entries: cleared by one PATCH
+        result = runner.invoke(cli, ["-p", "home", "denylist", "clear"], input="n\n")
+        assert "Apply the new plan?" in result.output
+        assert result.exit_code == 1 and not fake.writes()
+
+
+@pytest.mark.usefixtures("keyed")
+def test_quick_edit_replan_reports_once(runner, fake, home, clock, monkeypatch):
+    """A re-plan rebuilds the edit from the fresh list without double-counting what was skipped."""
+    from nextdnsctl import executor as executor_mod
+
+    monkeypatch.setattr(executor_mod, "FRESH_SECONDS", -1)  # always re-check
+    original = fake._domain_list
+
+    def changing(profile, name, method, rest, body):
+        if method == "GET" and not getattr(changing, "done", False) and len(fake.requests) > 2:
+            changing.done = True
+            profile[name].insert(0, {"id": "concurrent.com", "active": True})
+        return original(profile, name, method, rest, body)
+
+    monkeypatch.setattr(fake, "_domain_list", changing)
+    result = run(runner, "-p", "home", "denylist", "add", "old.com", "a.com", "b.com")
+    assert result.exit_code == 0, result.output
+    assert sorted(e["id"] for e in home["denylist"]) == ["a.com", "b.com", "concurrent.com", "old.com"]
+    assert "Already present: 1" in result.output
+
+
+@pytest.mark.usefixtures("keyed")
+def test_entry_added_by_someone_else_during_a_quick_add_is_not_drift(runner, fake, home, monkeypatch):
+    original = fake._domain_list
+
+    def concurrent(profile, name, method, rest, body):
+        response = original(profile, name, method, rest, body)
+        if method == "POST":
+            profile[name].insert(0, {"id": "concurrent.com", "active": True})
+        return response
+
+    monkeypatch.setattr(fake, "_domain_list", concurrent)
+    result = run(runner, "-p", "home", "denylist", "add", "a.com")
+    assert result.exit_code == 0, result.output
+    assert sorted(e["id"] for e in home["denylist"]) == ["a.com", "concurrent.com", "old.com"]

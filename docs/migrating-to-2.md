@@ -11,7 +11,7 @@ warning. These are the changes you may notice.
 | Invalid lines in `import` were skipped | The import fails and lists the lines | Fix the source, or pass `--skip-invalid` |
 | Invalid domains in `add` were skipped | The command fails and lists them | Remove them from the command |
 | `example.com/path` and `example.com:8080` were reduced to `example.com` | Rejected as ambiguous | Pass the domain, or a full URL with a scheme (`https://example.com/path` still works) |
-| `denylist add PROFILE domain…` | `denylist add -p PROFILE domain…` (or `NEXTDNS_PROFILE`) | The old form still works in 2.0 with a warning; it will be removed in 2.1 |
+| `denylist add PROFILE domain…` | `denylist add -p PROFILE domain…` (or `NEXTDNS_PROFILE`) | The old form still works in 2.0 with a warning; it will be removed in 2.2 |
 | `profile-list` | `profile list` | The old name still works with a warning |
 | `auth KEY` | `auth login` (prompts, or reads stdin) | The old form still works but warns that the key ends up in your shell history |
 | `--concurrency`, `--retry-attempts`, `--retry-delay` | No effect | Remove them; writes are paced to NextDNS's rate limit automatically |

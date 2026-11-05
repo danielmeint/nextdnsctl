@@ -14,6 +14,13 @@ from .planner import Op, Planner, ProfilePlan
 log = logging.getLogger(__name__)
 
 Progress = Callable[[Op, Optional[str]], None]  # called after each op with an error message or None
+# Called when the profile changed after the plan was made: (old plan, new plan) -> go ahead?
+OnRebase = Callable[[ProfilePlan, ProfilePlan], bool]
+
+# A PATCH replaces whole lists (A2), so an entry someone adds between reading a list and
+# writing it would be lost. Plans older than this are re-checked before such a write (e.g.
+# after a confirmation prompt); younger ones were read moments ago.
+FRESH_SECONDS = 5.0
 
 
 @dataclass
@@ -21,11 +28,16 @@ class ApplyResult:
     plan: ProfilePlan
     profile_id: Optional[str] = None
     created: bool = False
-    patched: bool = False
+    patches_done: int = 0
     ops_done: int = 0
+    rebased: bool = False
     failures: list[tuple[str, str]] = field(default_factory=list)  # (what, why)
     aborted: Optional[str] = None
     drift: Optional[Diff] = None
+
+    @property
+    def patched(self) -> bool:
+        return self.patches_done > 0
 
     @property
     def ok(self) -> bool:
@@ -38,9 +50,10 @@ class ApplyResult:
 
 
 class Executor:
-    def __init__(self, client: Client, planner: Planner):
+    def __init__(self, client: Client, planner: Planner, on_rebase: Optional[OnRebase] = None):
         self.client = client
         self.planner = planner
+        self.on_rebase = on_rebase
 
     def apply(self, plan: ProfilePlan, progress: Optional[Progress] = None, verify: bool = True) -> ApplyResult:
         result = ApplyResult(plan, plan.profile_id)
@@ -55,15 +68,26 @@ class Executor:
                     plan.key, result.profile_id, plan.resolved, self.planner.live(result.profile_id)
                 )
                 result.plan = plan
+            else:
+                fresh = self._refreshed(plan)
+                if fresh is not None:
+                    result.rebased = True
+                    result.plan = fresh
+                    if self.on_rebase is not None and not self.on_rebase(plan, fresh):
+                        result.aborted = "cancelled: the profile changed in NextDNS after the plan was shown"
+                        return result
+                    plan = fresh
             assert result.profile_id is not None
 
-            if plan.patch:
+            for patch in plan.patches:
                 try:
-                    self.client.patch_profile(result.profile_id, plan.patch)
-                    result.patched = True
+                    self.client.patch_profile(result.profile_id, patch.body)
+                    result.patches_done += 1
                 except APIError as e:
-                    result.failures.append(("profile update", explain_api_error(e, plan.patch_origins)))
-                    return result  # all-or-nothing (A1): nothing was applied, don't continue piecemeal
+                    what = "profile update" + (f" ({', '.join(patch.sections)})" if len(plan.patches) > 1 else "")
+                    result.failures.append((what, explain_api_error(e, patch.origins)))
+                    # Each PATCH is all-or-nothing (A1): this one changed nothing; don't go on piecemeal.
+                    return result
 
             for op in plan.ops:
                 error = self._run_op(result.profile_id, op)
@@ -82,10 +106,25 @@ class Executor:
 
         if verify and not result.failures:
             current = self.planner.live_for({"id": result.profile_id, "name": plan.name}, plan.resolved.overlay)
-            after = self.planner.plan_against(plan.key, result.profile_id, plan.resolved, current)
+            # A quick edit's target is built from the live list, so entries someone else added
+            # meanwhile (which per-entry writes leave alone) aren't drift.
+            if plan.rebase is not None:
+                after = plan.rebase(current)
+            else:
+                after = self.planner.plan_against(plan.key, result.profile_id, plan.resolved, current)
             if after.diff:
                 result.drift = after.diff
         return result
+
+    def _refreshed(self, plan: ProfilePlan) -> Optional[ProfilePlan]:
+        """A new plan if what the plan's PATCHes would overwrite changed since it was read."""
+        if plan.rebase is None or self.planner.clock() - plan.read_at < FRESH_SECONDS:
+            return None
+        fresh = self.planner.refresh(plan)
+        if fresh is None:
+            return None
+        log.info("%s changed in NextDNS since it was read; planning again", plan.key)
+        return plan.rebase(fresh)
 
     def _run_op(self, profile_id: str, op: Op) -> Optional[str]:
         try:

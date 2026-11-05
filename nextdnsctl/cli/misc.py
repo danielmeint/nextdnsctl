@@ -20,7 +20,7 @@ from ..model import canonicalize
 from ..planner import Resolved
 from . import ConfirmationRequired, State, cli, pass_state
 from .declarative import confirm, run_plans
-from .lists import add_entries, change_list, report_skipped
+from .lists import add_entries, change_list
 from .output import emit_json, info, render_plan, warn
 
 # ── auth ───────────────────────────────────────────────────────────────────
@@ -393,6 +393,4 @@ def why(state: State, domain: str, since: str, allow: bool) -> None:
             examples = ", ".join(sorted(domains[reason])[:3])
             click.echo(f"  {reason}: {count} quer{'y' if count == 1 else 'ies'}, last {last_seen[reason]} ({examples})")
     if allow:
-        build, report = add_entries([name], True, True)
-        change_list(state, found["id"], "allowlist", build)
-        report_skipped(report)
+        change_list(state, found["id"], "allowlist", add_entries([name], True, True))

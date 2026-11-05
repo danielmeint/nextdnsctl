@@ -2,16 +2,23 @@
 
 Write strategy (docs/v2-design.md, "Planning the writes"):
 
-1. Every changed section that the profile PATCH accepts goes into one request, which
-   NextDNS applies all-or-nothing (A1). Arrays are sent in full, values alone (A2).
-2. If that body would exceed the size limit (A3), the largest domain lists are taken out
-   one at a time and applied entry by entry instead, paced to the rate limit (A11).
-3. Rewrites are always applied entry by entry (A10).
+1. Every changed section that the profile PATCH accepts goes into a PATCH, which NextDNS
+   applies all-or-nothing (A1). Arrays are sent in full, values alone (A2).
+2. If they don't all fit in one request (A3), they are packed into as few PATCHes as fit.
+3. A domain list too large for any one request is sent as one PATCH holding every entry
+   it keeps plus as many new ones as fit, and the rest are added entry by entry, paced to
+   the rate limit (A11). If even the kept entries don't fit, it is applied entry by entry,
+   unless `allow_gaps` lets some kept entries be dropped briefly and re-added.
+4. A list with a single change uses the entry's own endpoint: same cost, and it can't
+   overwrite an entry someone else added meanwhile, as a full-list PATCH would.
+5. Rewrites are always applied entry by entry (A10).
 """
 
 from __future__ import annotations
 
+import copy
 import difflib
+import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -40,6 +47,8 @@ log = logging.getLogger(__name__)
 SAFE_BODY_BYTES = MAX_BODY_BYTES - 4 * 1024
 SOURCE_ERROR_PREVIEW = 20
 PREFETCH_WORKERS = 4
+# Only suggest --allow-gaps when it saves at least this many writes (about a minute).
+GAP_HINT_MIN_SAVING = 60
 LIST_ENDPOINTS = {"denylist", "allowlist", "rewrites"}
 
 
@@ -66,6 +75,24 @@ class Op:
 
 
 @dataclass
+class Patch:
+    """One atomic PATCH /profiles/:id."""
+
+    body: dict[str, Any]
+    origins: dict[str, Origin] = field(default_factory=dict)  # JSON pointer prefix -> origin
+    sections: list[str] = field(default_factory=list)
+
+
+@dataclass
+class GapHint:
+    """What --allow-gaps would change for a list that is applied entry by entry."""
+
+    section: str
+    writes: int  # writes with --allow-gaps
+    gap: int  # kept entries that would be missing until re-added
+
+
+@dataclass
 class Resolved:
     """A profile's overlay with sources fetched and merged, plus where each value came from."""
 
@@ -74,6 +101,7 @@ class Resolved:
     entry_origins: dict[tuple[str, str], Origin] = field(default_factory=dict)  # (list, domain) -> origin
     unchecked: list[Path] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    report: dict[str, list[str]] = field(default_factory=dict)  # quick edits: what was skipped and why
 
 
 @dataclass
@@ -83,10 +111,17 @@ class ProfilePlan:
     profile_id: Optional[str]  # None when the profile will be created
     resolved: Resolved
     diff: Diff = field(default_factory=Diff)
-    patch: dict[str, Any] = field(default_factory=dict)
-    patch_origins: dict[str, Origin] = field(default_factory=dict)  # JSON pointer prefix -> origin
+    patches: list[Patch] = field(default_factory=list)
     ops: list[Op] = field(default_factory=list)
-    incremental_sections: list[str] = field(default_factory=list)
+    incremental_sections: list[str] = field(default_factory=list)  # lists applied entry by entry
+    partial_sections: list[str] = field(default_factory=list)  # one PATCH, then the rest entry by entry
+    gap: int = 0  # kept entries dropped by a PATCH and re-added afterwards (allow_gaps)
+    gap_hints: list[GapHint] = field(default_factory=list)
+    # The API state the plan was made from, when it was read, and how to plan again from a
+    # fresh copy (the executor re-checks before a write that could overwrite other changes).
+    api_profile: dict[str, Any] = field(default_factory=dict)
+    read_at: float = 0.0
+    rebase: Optional[Callable[[dict[str, Any]], "ProfilePlan"]] = field(default=None, repr=False)
 
     @property
     def create(self) -> bool:
@@ -103,7 +138,12 @@ class ProfilePlan:
 
     @property
     def writes(self) -> int:
-        return (1 if self.patch else 0) + len(self.ops)
+        return len(self.patches) + len(self.ops)
+
+    @property
+    def full_list_paths(self) -> list[Path]:
+        """Arrays some PATCH replaces wholesale, which would overwrite concurrent changes to them."""
+        return [path for path in ARRAY_SPECS if any(get_path(p.body, path) is not None for p in self.patches)]
 
     @property
     def estimated_seconds(self) -> float:
@@ -120,10 +160,14 @@ class Planner:
         client: Client,
         *,
         validate_catalogs: bool = True,
+        allow_gaps: bool = False,
         progress: Optional[Callable[[str], None]] = None,
+        clock: Optional[Callable[[], float]] = None,
     ):
         self.client = client
         self.validate_catalogs = validate_catalogs
+        self.allow_gaps = allow_gaps
+        self.clock: Callable[[], float] = clock or client.clock
         self.progress = progress or (lambda message: None)
         self._profiles: Optional[list[dict[str, Any]]] = None
         self._catalogs: dict[str, Optional[set[str]]] = {}
@@ -217,14 +261,44 @@ class Planner:
         return self.plan_against(profile.key, found["id"], resolved, self.live(found["id"]))
 
     def plan_against(self, key: str, profile_id: str, resolved: Resolved, api_profile: dict[str, Any]) -> ProfilePlan:
+        return self.plan_with(key, profile_id, lambda api: resolved, api_profile)
+
+    def plan_with(
+        self,
+        key: str,
+        profile_id: str,
+        make_resolved: Callable[[dict[str, Any]], Resolved],
+        api_profile: dict[str, Any],
+    ) -> ProfilePlan:
+        """Plan against `api_profile`, with a desired state that may depend on it (quick edits)."""
+        resolved = make_resolved(api_profile)
         live = canonicalize(api_profile)
         self._check_unchecked(resolved, live)
         self._check_catalog_ids(resolved, live)
         target = apply_overlay(live, resolved.overlay)
         plan = ProfilePlan(key, str(api_profile.get("name", key)), profile_id, resolved)
         plan.diff = diff(live, target)
+        plan.api_profile = api_profile
+        plan.read_at = self.clock()
+        plan.rebase = lambda fresh: self.plan_with(key, profile_id, make_resolved, fresh)
         self._build_writes(plan, api_profile)
         return plan
+
+    def refresh(self, plan: ProfilePlan) -> Optional[dict[str, Any]]:
+        """Re-read what the plan's PATCHes would replace wholesale.
+
+        Returns the API profile with fresh copies of those sections if any of them changed
+        since the plan was made, otherwise None.
+        """
+        paths = plan.full_list_paths
+        if plan.profile_id is None or not paths:
+            return None
+        sections = {path[0] for path in paths}
+        fresh = self.live_for({"id": plan.profile_id, "name": plan.name}, sections)
+        before, after = canonicalize(plan.api_profile), canonicalize(fresh)
+        if all(_same_entries(get_path(before, p), get_path(after, p)) for p in paths):
+            return None
+        return {**plan.api_profile, **{k: v for k, v in fresh.items() if k in sections}}
 
     # ── resolving the overlay ──────────────────────────────────────────────
 
@@ -335,53 +409,177 @@ class Planner:
     # ── writes ─────────────────────────────────────────────────────────────
 
     def _build_writes(self, plan: ProfilePlan, api_profile: dict[str, Any]) -> None:
-        patch: dict[str, Any] = {}
-        origins: dict[str, Origin] = {}
+        units: list[Patch] = []  # one per changed section, packed into PATCHes below
+        partial: list[Patch] = []  # large lists: PATCHes of their own
+        restores: list[Op] = []  # kept entries a PATCH drops (allow_gaps), re-added first
         incremental: list[ArrayChange] = []
+        adds: list[Op] = []
 
+        values: dict[str, Any] = {}
         for value in plan.diff.values:
-            set_path(patch, value.path, value.after)
-            origin = plan.resolved.origins.get(value.path)
-            if origin:
-                origins["/" + "/".join(value.path)] = origin
+            set_path(values, value.path, value.after)
+        if values:
+            units.append(Patch(values, sections=sorted(values)))
 
-        patchable: list[ArrayChange] = []
         for change in plan.diff.arrays:
-            if change.spec.patchable:
-                patchable.append(change)
-            else:
+            spec = change.spec
+            if not spec.patchable or (spec.item_endpoints and _change_count(change) == 1):
                 incremental.append(change)
-
-        for change in patchable:
-            set_path(patch, change.path, [_api_entry(change.spec, e) for e in change.after])
-
-        # Too big for one request (A3)? Move the largest domain lists out, one at a time.
-        while patch and len(encode_body(patch)) > SAFE_BODY_BYTES:
-            movable = [c for c in patchable if c.spec.item_endpoints and get_path(patch, c.path) is not None]
-            if not movable:
-                raise PlanError(
-                    f"the changes to profile {plan.key!r} don't fit in one request "
-                    f"({len(encode_body(patch))} bytes, limit {MAX_BODY_BYTES}) and can't be split further"
-                )
-            largest = max(movable, key=lambda c: len(encode_body(get_path(patch, c.path))))
-            _remove_path(patch, largest.path)
-            incremental.append(largest)
-            plan.incremental_sections.append(largest.spec.name)
-
-        for change in patchable:
-            if get_path(patch, change.path) is None:
                 continue
-            for index, entry in enumerate(change.after):
-                key = str(entry.get(change.spec.key))
-                origin = plan.resolved.entry_origins.get((change.spec.name, key)) or plan.resolved.origins.get(
-                    change.path
-                )
-                if origin:
-                    origins[f"/{'/'.join(change.path)}/{index}"] = origin
+            body: dict[str, Any] = {}
+            set_path(body, change.path, [_api_entry(spec, e) for e in change.after])
+            if not spec.item_endpoints or len(encode_body(body)) <= SAFE_BODY_BYTES:
+                units.append(Patch(body, sections=[spec.name]))
+                continue
+            split = self._split_large(change)
+            if split is None:
+                incremental.append(change)
+                plan.incremental_sections.append(spec.name)
+                continue
+            patch, gap_entries, rest = split
+            partial.append(patch)
+            plan.partial_sections.append(spec.name)
+            plan.gap += len(gap_entries)
+            restores += [_add_op(spec, e) for e in gap_entries]
+            adds += [_add_op(spec, e) for e in rest]
 
-        plan.patch = patch
-        plan.patch_origins = origins
-        plan.ops = _incremental_ops(incremental, api_profile)
+        plan.patches = _pack(units, plan.key) + partial
+        for patch in plan.patches:
+            patch.origins = _origins(patch.body, plan)
+        plan.ops = restores + _incremental_ops(incremental, api_profile) + adds
+        for change in plan.diff.arrays:
+            if change.spec.name in plan.incremental_sections:
+                hint = self._gap_hint(change)
+                if hint:
+                    plan.gap_hints.append(hint)
+
+    def _split_large(self, change: ArrayChange) -> Optional[tuple[Patch, list[dict], list[dict]]]:
+        """For a list too large for one request: one PATCH plus per-entry adds, if that
+        takes fewer writes than applying every change entry by entry.
+
+        The PATCH holds every entry the list keeps, so none of them is ever missing, plus as
+        many new entries as fit. When the kept entries alone don't fit, `allow_gaps` lets
+        the PATCH drop some of them; they are re-added right after it.
+
+        Returns (patch, kept entries to re-add, new entries to add) or None.
+        """
+        spec = change.spec
+        kept, new = _kept_and_new(change)
+        cost_incremental = _change_count(change)
+        fit_kept = _prefix_fitting(spec, kept, SAFE_BODY_BYTES)
+        if fit_kept < len(kept) and not self.allow_gaps:
+            return None
+        if fit_kept < len(kept):
+            body_entries, gap, rest = kept[:fit_kept], kept[fit_kept:], new
+        else:
+            fit_new = _prefix_fitting(spec, new, SAFE_BODY_BYTES - _list_bytes(spec, kept))
+            body_entries, gap, rest = kept + new[:fit_new], [], new[fit_new:]
+        if 1 + len(gap) + len(rest) >= cost_incremental:
+            return None
+        body: dict[str, Any] = {}
+        set_path(body, change.path, [_api_entry(spec, e) for e in body_entries])
+        return Patch(body, sections=[spec.name]), gap, rest
+
+    def _gap_hint(self, change: ArrayChange) -> Optional[GapHint]:
+        if self.allow_gaps or not change.spec.item_endpoints:
+            return None
+        kept, new = _kept_and_new(change)
+        fit = _prefix_fitting(change.spec, kept, SAFE_BODY_BYTES)
+        if fit >= len(kept):
+            return None
+        writes = 1 + (len(kept) - fit) + len(new)
+        if _change_count(change) - writes < GAP_HINT_MIN_SAVING:
+            return None
+        return GapHint(change.spec.name, writes, len(kept) - fit)
+
+
+def _change_count(change: ArrayChange) -> int:
+    return len(change.added) + len(change.removed) + len(change.updated)
+
+
+def _kept_and_new(change: ArrayChange) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    key = change.spec.key
+    before = {e[key] for e in change.before}
+    return [e for e in change.after if e[key] in before], [e for e in change.after if e[key] not in before]
+
+
+def _list_bytes(spec: ArraySpec, entries: list[dict[str, Any]]) -> int:
+    """Bytes the entries add to a JSON array, separators included."""
+    return sum(len(encode_body(_api_entry(spec, e))) + 1 for e in entries)
+
+
+def _prefix_fitting(spec: ArraySpec, entries: list[dict[str, Any]], budget: int) -> int:
+    """How many leading entries fit in a PATCH of this list within `budget` bytes."""
+    empty: dict[str, Any] = {}
+    set_path(empty, spec.path, [])
+    remaining = budget - len(encode_body(empty))
+    for count, entry in enumerate(entries):
+        remaining -= len(encode_body(_api_entry(spec, entry))) + 1
+        if remaining < 0:
+            return count
+    return len(entries)
+
+
+def _pack(units: list[Patch], key: str) -> list[Patch]:
+    """Pack section updates into as few PATCHes as fit (first fit, largest first)."""
+    bins: list[Patch] = []
+    for unit in sorted(units, key=lambda u: len(encode_body(u.body)), reverse=True):
+        size = len(encode_body(unit.body))
+        if size > SAFE_BODY_BYTES:
+            raise PlanError(
+                f"the changes to {', '.join(unit.sections)} in profile {key!r} don't fit in one request "
+                f"({size} bytes, limit {MAX_BODY_BYTES}) and can't be split"
+            )
+        for patch in bins:
+            merged = _merged(patch.body, unit.body)
+            if len(encode_body(merged)) <= SAFE_BODY_BYTES:
+                patch.body = merged
+                patch.sections += unit.sections
+                break
+        else:
+            bins.append(Patch(copy.deepcopy(unit.body), sections=list(unit.sections)))
+    return bins
+
+
+def _merged(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(a)
+    for key, value in b.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _merged(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
+
+
+def _origins(body: dict[str, Any], plan: ProfilePlan) -> dict[str, Origin]:
+    """JSON pointer prefixes in a PATCH body mapped to where the values came from (A9)."""
+    origins: dict[str, Origin] = {}
+    for value in plan.diff.values:
+        origin = plan.resolved.origins.get(value.path)
+        if origin and get_path(body, value.path) is not None:
+            origins["/" + "/".join(value.path)] = origin
+    for path, spec in ARRAY_SPECS.items():
+        entries = get_path(body, path)
+        if entries is None:
+            continue
+        section_origin = plan.resolved.origins.get(path)
+        for index, entry in enumerate(entries):
+            origin = plan.resolved.entry_origins.get((spec.name, str(entry.get(spec.key)))) or section_origin
+            if origin:
+                origins[f"/{'/'.join(path)}/{index}"] = origin
+    return origins
+
+
+def _same_entries(a: Optional[list[dict[str, Any]]], b: Optional[list[dict[str, Any]]]) -> bool:
+    def frozen(entries: Optional[list[dict[str, Any]]]) -> list[str]:
+        return sorted(json.dumps(e, sort_keys=True) for e in entries or [])
+
+    return frozen(a) == frozen(b)
+
+
+def _add_op(spec: ArraySpec, entry: dict[str, Any]) -> Op:
+    key = entry[spec.key]
+    return Op("add", spec.name, "POST", spec.name.replace(".", "/"), {spec.key: key, **_fields(spec, entry)}, key)
 
 
 def _api_entry(spec: ArraySpec, entry: dict[str, Any]) -> dict[str, Any]:
@@ -390,16 +588,6 @@ def _api_entry(spec: ArraySpec, entry: dict[str, Any]) -> dict[str, Any]:
     if spec.domains and result.get("active") is True:
         del result["active"]
     return result
-
-
-def _remove_path(target: dict[str, Any], path: Path) -> None:
-    parents = [target]
-    for key in path[:-1]:
-        parents.append(parents[-1][key])
-    del parents[-1][path[-1]]
-    for depth in range(len(path) - 1, 0, -1):
-        if not parents[depth]:
-            del parents[depth - 1][path[depth - 1]]
 
 
 def _incremental_ops(changes: list[ArrayChange], api_profile: dict[str, Any]) -> list[Op]:
@@ -422,8 +610,7 @@ def _incremental_ops(changes: list[ArrayChange], api_profile: dict[str, Any]) ->
                 ops.append(Op("add", "rewrites", "POST", "rewrites", body, _rewrite_label(entry)))
             continue
         for entry in change.added:
-            key = entry[spec.key]
-            ops.append(Op("add", spec.name, "POST", section, {spec.key: key, **_fields(spec, entry)}, key))
+            ops.append(_add_op(spec, entry))
         for before, after in change.updated:
             key = after[spec.key]
             ops.append(Op("update", spec.name, "PATCH", f"{section}/{key}", _fields(spec, after), key))

@@ -157,6 +157,7 @@ class Client:
         self.session.headers.update({"User-Agent": f"nextdnsctl/{__version__}"})
         if api_key:
             self.session.headers["X-Api-Key"] = api_key
+        self.clock = clock
         self._sleep = sleep
         self.hooks: Optional[RequestHooks] = None
         self.writes = Pacer(write_interval, clock, sleep)

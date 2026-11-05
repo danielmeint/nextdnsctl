@@ -74,12 +74,12 @@ class StatusLine:
         """Don't draw at all while something else owns the line (e.g. a progress bar)."""
         with self._lock:
             self._clear()
-            self._paused = True
+            previous, self._paused = self._paused, True
         try:
             yield
         finally:
             with self._lock:
-                self._paused = False
+                self._paused = previous  # nestable: a prompt during a progress bar
 
     @contextmanager
     def suspended(self) -> Iterator[None]:

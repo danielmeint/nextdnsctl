@@ -15,6 +15,10 @@ from .declarative import confirm, run_plans
 from .output import emit_json, info, render_plan, warn
 
 Entries = list[dict[str, Any]]
+Report = dict[str, list[str]]
+# Builds the new list from the live one, and reports what it skipped. Called again if the
+# list changes before it is written, so it must not keep state between calls.
+Build = Callable[[Entries], tuple[Entries, Report]]
 
 
 def profile_and_args(state: State, args: tuple[str, ...]) -> tuple[str, tuple[str, ...]]:
@@ -28,7 +32,7 @@ def profile_and_args(state: State, args: tuple[str, ...]) -> tuple[str, tuple[st
             found = None
         if found is not None:
             warn(
-                "giving the profile as the first argument is deprecated and will be removed in 2.1; "
+                "giving the profile as the first argument is deprecated and will be removed in 2.2; "
                 f"use -p {args[0]!r} or set NEXTDNS_PROFILE"
             )
             return args[0], args[1:]
@@ -51,7 +55,7 @@ def change_list(
     state: State,
     profile_name: str,
     list_name: str,
-    build: Callable[[Entries], Entries],
+    build: Build,
     needs_confirmation: bool = False,
     yes: bool = False,
 ) -> None:
@@ -59,32 +63,37 @@ def change_list(
     planner = state.planner
     profile = planner.require_profile(profile_name)
     api_profile = planner.live_for(profile, {list_name})
-    live_entries = canonicalize(api_profile).get(list_name) or []
-    resolved = Resolved(overlay={list_name: build(live_entries)})
-    plan = planner.plan_against(profile["name"], profile["id"], resolved, api_profile)
+
+    # Built from the live list each time, so a re-plan (the list changed meanwhile) keeps the intent.
+    def resolve(api: dict[str, Any]) -> Resolved:
+        entries, report = build(canonicalize(api).get(list_name) or [])
+        return Resolved(overlay={list_name: entries}, report=report)
+
+    plan = planner.plan_with(profile["name"], profile["id"], resolve, api_profile)
     if not plan.has_changes:
         info("No changes needed.")
+        report_skipped(plan.resolved.report)
         return
     if not state.json:
         for line in render_plan(plan, state.verbose):
             click.echo(line)
     if state.dry_run:
         info("Dry run: nothing was changed.")
+        report_skipped(plan.resolved.report)
         return
     if needs_confirmation:
         confirm([plan], yes)
-    run_plans(state, [plan])
+    [result] = run_plans(state, [plan], confirmed=needs_confirmation and not yes)
     if not state.json:
         info(f"View at: https://my.nextdns.io/{profile['id']}/{list_name}")
+    report_skipped(result.plan.resolved.report)
 
 
-def add_entries(
-    domains: list[str], active: bool, update_existing: bool
-) -> tuple[Callable[[Entries], Entries], dict[str, list[str]]]:
-    """A builder adding `domains`, plus a report of what was skipped (filled in when it runs)."""
-    report: dict[str, list[str]] = {"present": [], "mismatched": []}
+def add_entries(domains: list[str], active: bool, update_existing: bool) -> Build:
+    """A builder adding `domains`."""
 
-    def build(live: Entries) -> Entries:
+    def build(live: Entries) -> tuple[Entries, Report]:
+        report: Report = {"present": [], "mismatched": []}
         by_id = {e["id"]: dict(e) for e in live}
         for domain in domains:
             if domain not in by_id:
@@ -95,12 +104,12 @@ def add_entries(
                 by_id[domain]["active"] = active
             else:
                 report["mismatched"].append(domain)
-        return list(by_id.values())
+        return list(by_id.values()), report
 
-    return build, report
+    return build
 
 
-def report_skipped(report: dict[str, list[str]]) -> None:
+def report_skipped(report: Report) -> None:
     if report.get("present"):
         info(f"Already present: {len(report['present'])}")
     if report.get("mismatched"):
@@ -158,9 +167,9 @@ def make_list_group(list_name: str, verb: str) -> click.Group:
         profile_name, rest = profile_and_args(state, args)
         if not rest:
             raise click.UsageError("No domains given.")
-        build, report = add_entries(normalize_arguments(rest), not inactive, update_existing)
-        change_list(state, profile_name, list_name, build)
-        report_skipped(report)
+        change_list(
+            state, profile_name, list_name, add_entries(normalize_arguments(rest), not inactive, update_existing)
+        )
 
     @group.command("remove")
     @click.argument("args", nargs=-1, required=True, metavar="DOMAIN...")
@@ -171,15 +180,12 @@ def make_list_group(list_name: str, verb: str) -> click.Group:
         if not rest:
             raise click.UsageError("No domains given.")
         domains = set(normalize_arguments(rest))
-        report: dict[str, list[str]] = {"missing": []}
 
-        def build(live: Entries) -> Entries:
+        def build(live: Entries) -> tuple[Entries, Report]:
             present = {e["id"] for e in live}
-            report["missing"] = sorted(domains - present)
-            return [e for e in live if e["id"] not in domains]
+            return [e for e in live if e["id"] not in domains], {"missing": sorted(domains - present)}
 
         change_list(state, profile_name, list_name, build)
-        report_skipped(report)
 
     @group.command("import")
     @click.argument("args", nargs=-1, required=True, metavar="SOURCE")
@@ -219,9 +225,7 @@ def make_list_group(list_name: str, verb: str) -> click.Group:
         if not domains:
             info("No domains found in the source.")
             return
-        build, report = add_entries(domains, not inactive, update_existing)
-        change_list(state, profile_name, list_name, build)
-        report_skipped(report)
+        change_list(state, profile_name, list_name, add_entries(domains, not inactive, update_existing))
 
     @group.command("export")
     @click.argument("args", nargs=-1, metavar="[OUTPUT]")
@@ -251,7 +255,7 @@ def make_list_group(list_name: str, verb: str) -> click.Group:
         profile_name, rest = profile_and_args(state, args)
         if rest:
             raise click.UsageError(f"unexpected argument {rest[0]!r}")
-        change_list(state, profile_name, list_name, lambda live: [], needs_confirmation=True, yes=yes)
+        change_list(state, profile_name, list_name, lambda live: ([], {}), needs_confirmation=True, yes=yes)
 
     return group
 

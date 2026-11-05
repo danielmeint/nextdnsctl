@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 import click
 
+from ..client import WRITE_INTERVAL
 from ..executor import ApplyResult
 from ..model import Diff
 from ..planner import ProfilePlan
@@ -91,16 +92,32 @@ def render_plan(plan: ProfilePlan, verbose: bool = False) -> list[str]:
     lines = [_style(title, bold=True)]
     lines += render_diff(plan.diff, verbose)
     writes = []
-    if plan.patch:
-        writes.append("1 atomic update")
+    if plan.patches:
+        count = len(plan.patches)
+        writes.append("1 atomic update" if count == 1 else f"{count} atomic updates")
     if plan.ops:
         writes.append(f"{len(plan.ops)} individual write(s)")
     summary = f"  Writes: {' + '.join(writes)}"
-    if plan.incremental_sections:
-        summary += f" ({', '.join(plan.incremental_sections)} too large for one request)"
     if plan.estimated_seconds >= 30:
         summary += f", about {_duration(plan.estimated_seconds)} at NextDNS's rate limit"
     lines.append(summary)
+    for section in plan.partial_sections:
+        lines.append(f"  {section} is too large for one request: one update, then the remaining entries one by one")
+    for section in plan.incremental_sections:
+        lines.append(f"  {section} is too large for one request: changed entry by entry")
+    if plan.gap:
+        lines.append(
+            _style(
+                f"  {plan.gap} entr{'y' if plan.gap == 1 else 'ies'} that stay in the list will be missing "
+                f"for up to {_duration(plan.gap * WRITE_INTERVAL)} until re-added (--allow-gaps)",
+                fg="yellow",
+            )
+        )
+    for hint in plan.gap_hints:
+        lines.append(
+            f"  With --allow-gaps: {hint.writes} writes instead, but {hint.gap} entries that stay in "
+            f"{hint.section} would be missing for a while"
+        )
     return lines
 
 
@@ -112,9 +129,12 @@ def plan_to_json(plan: ProfilePlan) -> dict[str, Any]:
         "create": plan.create,
         "changes": diff_to_json(plan.diff),
         "writes": {
-            "atomic_update": bool(plan.patch),
+            "atomic_update": bool(plan.patches),
+            "atomic_updates": len(plan.patches),
             "individual": len(plan.ops),
             "incremental_sections": plan.incremental_sections,
+            "partial_sections": plan.partial_sections,
+            "gap_entries": plan.gap,
             "estimated_seconds": plan.estimated_seconds,
         },
         "warnings": plan.warnings,
@@ -142,6 +162,8 @@ def result_to_json(result: ApplyResult) -> dict[str, Any]:
         "id": result.profile_id,
         "created": result.created,
         "updated": result.patched,
+        "atomic_updates": result.patches_done,
+        "replanned": result.rebased,
         "individual_writes": result.ops_done,
         "failures": [{"what": w, "error": e} for w, e in result.failures],
         "aborted": result.aborted,
@@ -161,7 +183,8 @@ def render_result(result: ApplyResult) -> list[str]:
         if result.ops_done:
             what.append(f"{result.ops_done} individual write(s)")
         return [_style(f"✓ {name}: {', '.join(what) or 'nothing to do'}", fg="green")]
-    lines = [_style(f"✗ {name}: not fully applied", fg="red", bold=True)]
+    state = "not fully applied" if result.partial else "not applied"
+    lines = [_style(f"✗ {name}: {state}", fg="red", bold=True)]
     for failed, why in result.failures[:PREVIEW]:
         lines.append(f"  {failed}: {why}")
     if len(result.failures) > PREVIEW:

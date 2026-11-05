@@ -52,6 +52,7 @@ document `PUT` for arrays (see A5) and say nothing about rate limits or catalogs
 | A15 | Undocumented **public catalogs** (no API key needed): `/privacy/blocklists` (83), `/privacy/natives` (8), `/parentalControl/services` (43), `/parentalControl/categories` (7), `/security/tlds` (~1 500). | Validate catalog ids locally before sending (fixes A9); offer `nextdnsctl catalog …` and shell completion. Fall back gracefully if they disappear. |
 | A16 | The server does **not** check TLDs against a list: `foo.notarealtld`, `.lan`, `.local`, `.internal` are accepted. `tld` errors only mean a single-label name. | The client regex is the whole check; no TLD list needed. |
 | A17 | Rewrites: the record type is **inferred** from `content` (IPv4 → A, IPv6 → AAAA, name → CNAME); sending `type` is rejected. Single-label names (`nas`) are allowed. Invalid content → `200` + `invalid` error. | Rewrite files don't carry a type; validate content client-side. |
+| A18 | Responses carry a weak `ETag` and `GET` honours `If-None-Match` (304), but **writes ignore `If-Match`**: a PATCH or POST with a stale ETag succeeds (checked 2026-11-05). | No server-side protection against lost updates: a full-list PATCH overwrites entries added after the list was read. Re-read before writing if the read is old, and prefer per-entry writes where they cost the same. |
 
 ## Command surface
 
@@ -166,15 +167,25 @@ GET /profiles/:id ──► normalise (A12) ──► live state ─────
 ### Planning the writes
 
 1. Diff each managed section. Unchanged sections are dropped.
-2. Build one PATCH body (A1) from every changed patchable section: changed arrays in
+2. A domain list with **exactly one change** uses the entry endpoint (POST, PATCH
+   `active`, DELETE): it costs the same single write as a PATCH, and unlike a PATCH it
+   can't overwrite entries someone else added meanwhile (A18).
+3. Every other changed patchable section becomes a PATCH fragment (A1): changed arrays in
    full (A2), changed object keys alone. Compact JSON, `active` omitted when true (A7).
-3. **If the body fits in 100 KiB minus a safety margin** (say 96 KiB): the whole apply is
-   one atomic request. This is the common case.
-4. **If not**: move the largest list sections out of the PATCH one at a time until it
-   fits. Each moved list becomes an incremental delta (POST adds, PATCH `active` changes,
-   DELETE removals). Note a list whose *target* fits can always be PATCHed, however big
-   the *live* list is, because only the body size matters (A3).
-5. Rewrites are always incremental (A10): diff on `(name, content)`; DELETE by server id,
+4. **Pack the fragments into as few PATCHes as fit** in 100 KiB minus a safety margin
+   (96 KiB), largest first. Usually that is one atomic request for the whole apply; two
+   big lists that don't fit together get one PATCH each (2 writes, each all-or-nothing)
+   rather than going entry by entry. Only the size of the *target* matters (A3), so a
+   list that shrinks to fit is always one PATCH, however big it was.
+5. **A domain list too large for any one request**: send one PATCH holding every entry
+   the list keeps plus as many new entries as fit, then POST the remaining new entries.
+   No kept entry is ever missing, and it never takes more writes than going entry by
+   entry. If even the kept entries don't fit, go entry by entry (POST adds, PATCH `active`
+   changes, DELETE removals) — unless `--allow-gaps`: then the PATCH holds as many kept
+   entries as fit, and the others are re-added right after it (first, before any new
+   entry). Used only when it saves writes; the plan says how many entries go missing, and
+   without the flag it says when the flag would save a lot.
+6. Rewrites are always incremental (A10): diff on `(name, content)`; DELETE by server id,
    POST new.
 
 The plan prints which path each section takes and, for incremental work, an estimate
@@ -182,8 +193,14 @@ from the limiter ("~1 840 writes, ~32 min at the API's rate limit").
 
 ### Executing
 
-- Atomic PATCH first, so most of the profile converges in one step even if incremental
-  work later fails.
+- PATCHes first, so most of the profile converges in a few steps even if incremental
+  work later fails. A failed PATCH stops the apply (the ones before it stay applied).
+- **Lost-update check**: a PATCH replaces whole lists, and NextDNS has no conditional
+  writes (A18). If the plan was read more than 5 s before its first write (a confirmation
+  prompt, earlier profiles in the same apply), re-read the arrays its PATCHes replace —
+  list endpoints only, unless a catalog array is involved. If they changed, plan again
+  from the fresh copy: quick edits rebuild their change from it (an `add` keeps the
+  newcomer); `apply` shows the new plan and asks again if it asked before.
 - Incremental ops go through **one sequential worker paced at 1 write/s** (A11). The
   budget is per key and the windows are fixed, so concurrency can't go faster. It only
   burns the window sooner. v1's thread pool and `--concurrency` go away.
@@ -296,7 +313,7 @@ deprecation warnings for what 2.0 changes.
 | v1 | v2 | Mitigation |
 |---|---|---|
 | invalid import lines silently skipped | error | `--skip-invalid`; 1.4 warns |
-| `denylist add PROFILE d…` | `denylist add -p PROFILE d…` | 2.0 still accepts a leading positional that matches a profile, with a deprecation warning, removed in 2.1 |
+| `denylist add PROFILE d…` | `denylist add -p PROFILE d…` | 2.0 still accepts a leading positional that matches a profile, with a deprecation warning, removed in 2.2 (moved from 2.1) |
 | `--concurrency`, `--retry-*` | removed | accepted and ignored with a warning in 2.0 |
 | `auth KEY` | `auth login` | `auth KEY` still works in 2.0 with a warning about shell history |
 | `~/.nextdnsctl/config.json` | XDG path | read as fallback, migrated on `auth login` |
