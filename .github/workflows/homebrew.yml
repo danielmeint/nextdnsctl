@@ -40,6 +40,35 @@ jobs:
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release version: '$VERSION'"; exit 1; }
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      # PyPI can take a few minutes to list a new upload, and the formula script
+      # pip-installs the release. Wait until pip can resolve it (up to 10 minutes).
+      - name: Wait for the release on PyPI
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -uo pipefail
+          errors=0
+          for _ in $(seq 40); do
+            dir="$(mktemp -d)"
+            if out="$(python -m pip download --quiet --no-deps --no-cache-dir --disable-pip-version-check \
+                -d "$dir" "nextdnsctl==$VERSION" 2>&1)"; then
+              echo "nextdnsctl $VERSION is on PyPI."
+              exit 0
+            fi
+            rm -rf "$dir"
+            if grep -q "No matching distribution" <<<"$out"; then
+              errors=0
+              echo "nextdnsctl $VERSION not on PyPI yet; retrying in 15 s."
+            else
+              errors=$((errors + 1))
+              echo "$out"
+              [ "$errors" -lt 3 ] || { echo "pip failed 3 times in a row."; exit 1; }
+            fi
+            sleep 15
+          done
+          echo "nextdnsctl $VERSION still not on PyPI after 10 minutes."
+          exit 1
+
       - name: Generate formula
         env:
           VERSION: ${{ steps.ver.outputs.version }}
